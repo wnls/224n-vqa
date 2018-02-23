@@ -41,8 +41,8 @@ class LSTMModel(nn.Module):
 		out = self.linear(out)
 
 if __name__ == '__main__':
-	json_filename = '/Users/Weini/Dev/git/visual7w-qa-models/visual7w-toolkit/datasets/visual7w-telling/dataset.json'
-	glove_p_filename = '/Users/Weini/Dev/GloVe/glove.6B/word2vec_glove.6B.300d.pkl'
+	json_filename = './data/visual7w-telling.json'
+	glove_p_filename = './data/word2vec_glove.6B.300d.pkl'
 	qa_map = preprocess.process_qas(json_filename, glove_p_filename)
 
 	# img_map:{img_id: img_feat_idx}
