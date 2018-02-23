@@ -1,7 +1,8 @@
 import json, string, pickle
 from gensim.scripts.glove2word2vec import glove2word2vec
 from gensim.models.keyedvectors import KeyedVectors
-from nltk.tokenize import WordPunctTokenizer
+# from nltk.tokenize import WordPunctTokenizer
+from nltk.tokenize import word_tokenize
 import numpy as np
 
 WORD_DIM = 300
@@ -33,7 +34,6 @@ def process_qas(json_filename, glove_p_filename):
 	with open(json_filename) as file:
 		json_data = json.load(file)
 		# qa_data = []
-		tokenizer = WordPunctTokenizer()
 		# qa_id_list = []
 		# image_id_list = []
 		for img in json_data['images']:
@@ -45,10 +45,10 @@ def process_qas(json_filename, glove_p_filename):
 			for qapair in img['qa_pairs']:
 				# qa_id, image_id
 				# qa_id_list.append(qapair['qa_id'])
-				q = tokenizer.tokenize(qapair['question'].strip(string.punctuation).lower())
-				answers = [tokenizer.tokenize(qapair['answer'].strip(string.punctuation).lower())]
+				q = word_tokenize(qapair['question'].strip(string.punctuation).lower())
+				answers = [word_tokenize(qapair['answer'].strip(string.punctuation).lower())]
 				for choice in qapair['multiple_choices']:
-					answers.append(tokenizer.tokenize(choice.strip(string.punctuation).lower()))
+					answers.append(word_tokenize(choice.strip(string.punctuation).lower()))
 
 				# qv = np.array([]).reshape(WORD_DIM,)
 				qv = sent2vec(glove_embed, q, WORD_DIM)
