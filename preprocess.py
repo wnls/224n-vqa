@@ -80,8 +80,8 @@ def process_qas(json_filename, glove_p_filename):
 	return qa_map
 
 if __name__ == '__main__':
-	json_filename = '/Users/Weini/Dev/git/visual7w-qa-models/visual7w-toolkit/datasets/visual7w-telling/dataset.json'
-	glove_p_filename = '/Users/Weini/Dev/GloVe/glove.6B/word2vec_glove.6B.300d.pkl'
+	json_filename = './data/visual7w-telling.json'
+	glove_p_filename = './data/word2vec_glove.6B.300d.pkl'
 	print(process_qas(json_filename, glove_p_filename)[0])
 
 	# print('image_id_list len', len(image_id_list))
