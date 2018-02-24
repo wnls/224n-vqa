@@ -30,7 +30,7 @@ class VQADataset(Dataset):
 
 	def __getitem__(self, index):
 		qa_id = self.qa_map[index]['qa_id']
-		img_id = self.qa_map[index]['img_id']
+		img_id = str(self.qa_map[index]['img_id'])
 		q_embed = self.qa_map[index]['q_embed']
 		a_embeds = self.qa_map[index]['a_embeds']
 		return q_embed, a_embeds, self.img_features[img_id], [1,0,0,0]
