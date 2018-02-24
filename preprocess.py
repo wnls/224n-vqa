@@ -26,7 +26,7 @@ def sent2vec(glove_embed, sentence, word_dim):
 			pass
 	return v
 
-def process_qas(json_filename, glove_p_filename):
+def process_qas(json_filename, glove_p_filename, save=''):
 	with open(glove_p_filename,'rb') as f:
 		glove_embed = pickle.load(f)
 
@@ -77,6 +77,9 @@ def process_qas(json_filename, glove_p_filename):
 						'q_embed': qv,
 						'a_embeds': av_list}
 				qa_map.append(qa)
+	if save:
+		with open(save, 'wb') as handle:
+			pickle.dump(qa_map, handle)
 	return qa_map
 
 if __name__ == '__main__':
