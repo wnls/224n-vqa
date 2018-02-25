@@ -17,13 +17,15 @@ import json
 # self-defined modules
 import preprocess
 
-
+# system
 USE_GPU = torch.cuda.is_available()
+# data
 FEAT_DIM = 2048
 WV_DIM = 300
-print_every = 50
 dtype = torch.FloatTensor
-# Hyperparameters
+# training
+print_every_train = 50
+print_every_val = 500
 batch_size = 32
 lr = 5e-4
 wd = 5e-4
@@ -76,11 +78,11 @@ def train(model, optim, loader):
 	stats = []
 	t_start = time()
 	for i,batch in enumerate(loader):
-		if i and i%print_every==0:
-			avg_loss = sum(stats[-print_every:])/print_every
-			avg_time = (time()-t_start)/print_every
+		if i and i%print_every_train==0:
+			avg_loss = sum(stats[-print_every_train:])/print_every_train
+			avg_time = (time()-t_start)/print_every_train
 			cur_acc = top1_cnt/total_cnt if total_cnt else -1
-			print('{:d}-{:d}: avg_loss={:f} / avg_time={:f}s / cur_acc={:f}'.format(i-print_every, i, avg_loss, avg_time, cur_acc))
+			print('{:d}-{:d}: avg_loss={:f} / avg_time={:f}s / cur_acc={:f}'.format(i-print_every_train, i, avg_loss, avg_time, cur_acc))
 			sys.stdout.flush()
 			t_start = time()
 
@@ -116,29 +118,33 @@ def eval(model, loader):
 
 	top1_cnt = 0
 	total_cnt = 0
+	t_start = time()
 	for i,batch in enumerate(loader):
-		if i and i%print_every==0:
-			print('{:d}-{:d}: avg_time={:f}s / cur_acc={:f}'.format(i-print_every, i,
-				(time()-t_start)/print_every, top1_cnt/total_cnt if total_cnt else -1))
+		if i and i%print_every_val==0:
+			avg_time = (time()-t_start)/print_every_val
+			cur_acc = top1_cnt/total_cnt if total_cnt else -1
+			print('{:d}-{:d}: avg_time={:f}s / cur_acc={:f}'.format(i-print_every_val, i, avg_time, cur_acc))
 			sys.stdout.flush()
 			t_start = time()
 
+		# unroll a batch
 		q_embed, a_embeds, img_feats, gt = batch
-		# convert to Variables
-		q_embed_var = Variable(q_embed.mean(1)).type(dtype)
-		img_feats_var = Variable(img_feats).type(dtype)
-		a_embeds_var = [Variable(a_embed.mean(1)).type(dtype) for a_embed in a_embeds]
-		gt_var = Variable(torch.transpose(gt, 0, 1)).type(dtype)
+		# Variable for autograd
+		q_embed_var = Variable(q_embed.view(q_embed.size(0)*q_embed.size(1), q_embed.size(2))).type(dtype) # Variable(q_embed.mean(1)).type(dtype)
+		img_feats_var = Variable(img_feats.view(img_feats.size(0)*img_feats.size(1), img_feats.size(2))).type(dtype)
+		a_embeds_var = Variable(a_embeds.view(a_embeds.size(0)*a_embeds.size(1), a_embeds.size(2))).type(dtype) # [Variable(a_embed).type(dtype) for a_embed in a_embeds] # [Variable(a_embed.mean(1)).type(dtype) for a_embed in a_embeds]
+		gt_var = Variable(gt.view(gt.size(0)*gt.size(1), gt.size(2))).type(dtype)
+		# Concatenate features: question + img + answers
+		concated = torch.cat([q_embed_var, img_feats_var, a_embeds_var], dim=1)
 
-		concated = torch.stack([torch.cat([q_embed_var, img_feats_var, a_embed_var], dim=1) for a_embed_var in a_embeds_var])
-		concated = concated.view(concated.size(0), concated.size(-1))
-
+		# forward
 		out = model(concated)
-		_, idx = out.sort()
-		top1_cnt += sum(idx[:,0] == 0)
-		total_cnt += idx
+		_, idx = out.view(q_embed.size(0), q_embed.size(1)).sort(dim=1, descending=True)
+		# update stats
+		top1_cnt += sum(idx[:, 0]==0).data[0]
+		total_cnt += idx.size(0)
 	acc = top1_cnt/total_cnt if total_cnt else -1
-	print("train top@1 accuracy:", -1)
+	print("val top@1 accuracy:", -1)
 	return acc
 
 
@@ -149,7 +155,10 @@ if __name__ == '__main__':
 	glove_p_filename = './data/word2vec_glove.6B.300d.pkl'
 	saved_qa_map_format = './data/qa_cache_{:s}.pkl'
 	# output files
-	file_format = './checkpoints/lr{:f}_wd{:f}_bts{:d}'.format(lr, wd, batch_size)
+	out_dir = './checkpoints'
+	if not os.path.exists(out_dir):
+		os.mkdir(out_dir)
+	file_format = os.path.join(out_dir, 'lr{:f}_wd{:f}_bts{:d}'.format(lr, wd, batch_size))
 	log_file = file_format + '.json'
 	checkpoint = file_format + '.pt'
 
@@ -173,15 +182,18 @@ if __name__ == '__main__':
 	model = BOWModel(in_dim=2*WV_DIM+FEAT_DIM, out_dim=1, hidden_dims=[1024, 512, 512])
 	loss_fn = torch.nn.BCEWithLogitsLoss()
 	if USE_GPU:
+		print("Use GPU")
 		model = model.cuda()
 		loss_fn = loss_fn.cuda()
+	else:
+		print("Use CPU")
 	optim = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=wd)
 
 	n_epoch = 100
 	best_acc = 0
 	stats = {'train_loss':[]}
 	for e in range(n_epoch):
-		stats['train_loss'] += train(model, optim, train_loader)
+		# stats['train_loss'] += train(model, optim, train_loader)
 		val_acc = eval(model, val_loader)
 
 		with open(log_file, "w") as handle:
