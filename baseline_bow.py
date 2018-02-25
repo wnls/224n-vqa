@@ -95,6 +95,9 @@ def train(model, optim, loader):
 		gt_var = Variable(gt.view(gt.size(0)*gt.size(1), gt.size(2))).type(dtype)
 		# Concatenate features: question + img + answers
 		concated = torch.cat([q_embed_var, img_feats_var, a_embeds_var], dim=1)
+		if USE_GPU:
+			concated = concated.cuda()
+			gt_var = gt_var.cuda()
 
 		# forward
 		out = model(concated)
@@ -136,6 +139,9 @@ def eval(model, loader):
 		gt_var = Variable(gt.view(gt.size(0)*gt.size(1), gt.size(2))).type(dtype)
 		# Concatenate features: question + img + answers
 		concated = torch.cat([q_embed_var, img_feats_var, a_embeds_var], dim=1)
+		if USE_GPU:
+			concated = concated.cuda()
+			gt_var = gt_var.cuda()
 
 		# forward
 		out = model(concated)
