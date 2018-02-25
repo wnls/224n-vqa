@@ -193,7 +193,7 @@ if __name__ == '__main__':
 	best_acc = 0
 	stats = {'train_loss':[]}
 	for e in range(n_epoch):
-		# stats['train_loss'] += train(model, optim, train_loader)
+		stats['train_loss'] += train(model, optim, train_loader)
 		val_acc = eval(model, val_loader)
 
 		with open(log_file, "w") as handle:
