@@ -24,7 +24,8 @@ WV_DIM = 300
 print_every = 50
 dtype = torch.FloatTensor
 # Hyperparameters
-lr = 5e-5
+batch_size = 32
+lr = 5e-4
 wd = 5e-4
 
 
@@ -45,7 +46,7 @@ class VQADataset(Dataset):
 		* a_embeds: list of 4 items, each of size (n_a, 300); the 1st item is GT
 		* img_feats: (2048,) i.e. 1D vector
 		"""
-		return q_embed, a_embeds, np.asarray(self.img_features[img_id]), np.asarray([1,0,0,0])
+		return np.tile(q_embed.mean(0), [4,1]), np.stack([a_embed.mean(0) for a_embed in a_embeds]), np.tile(np.asarray(self.img_features[img_id]), [4,1]), np.asarray([1,0,0,0]).reshape(4,1)
 
 	def __len__(self):
 		return len(self.qa_map)
@@ -85,22 +86,20 @@ def train(model, optim, loader):
 
 		# unroll a batch
 		q_embed, a_embeds, img_feats, gt = batch
-		# convert to Variables
-		q_embed_var = Variable(q_embed.mean(1)).type(dtype)
-		img_feats_var = Variable(img_feats).type(dtype)
-		a_embeds_var = [Variable(a_embed.mean(1)).type(dtype) for a_embed in a_embeds]
-		gt_var = Variable(torch.transpose(gt, 0, 1)).type(dtype)
-
-		concated = torch.stack([torch.cat([q_embed_var, img_feats_var, a_embed_var], dim=1) for a_embed_var in a_embeds_var])
-		concated = concated.view(concated.size(0), concated.size(-1))
+		# Variable for autograd
+		q_embed_var = Variable(q_embed.view(q_embed.size(0)*q_embed.size(1), q_embed.size(2))).type(dtype) # Variable(q_embed.mean(1)).type(dtype)
+		img_feats_var = Variable(img_feats.view(img_feats.size(0)*img_feats.size(1), img_feats.size(2))).type(dtype)
+		a_embeds_var = Variable(a_embeds.view(a_embeds.size(0)*a_embeds.size(1), a_embeds.size(2))).type(dtype) # [Variable(a_embed).type(dtype) for a_embed in a_embeds] # [Variable(a_embed.mean(1)).type(dtype) for a_embed in a_embeds]
+		gt_var = Variable(gt.view(gt.size(0)*gt.size(1), gt.size(2))).type(dtype)
+		# Concatenate features: question + img + answers
+		concated = torch.cat([q_embed_var, img_feats_var, a_embeds_var], dim=1)
 
 		# forward
 		out = model(concated)
-		_, idx = out.sort()
+		_, idx = out.view(q_embed.size(0), q_embed.size(1)).sort(dim=1, descending=True)
 		loss = loss_fn(out, gt_var)
 		# update stats
-		if idx.data[3,0] == 0:
-			top1_cnt += 1
+		top1_cnt += sum(idx[:, 0]==0).data[0]
 		total_cnt += idx.size(0)
 		stats.append(loss.data[0])
 		# backward
@@ -108,6 +107,7 @@ def train(model, optim, loader):
 		loss.backward()
 		optim.step()
 	print("train top@1 accuracy:", top1_cnt/total_cnt if total_cnt else "N/A")
+	return stats
 
 
 
@@ -143,11 +143,15 @@ def eval(model, loader):
 
 
 if __name__ == '__main__':
+	# input files
 	json_filename_format = './data/visual7w-telling_{:s}.json'
 	img_feats_fname = './data/resnet101_avgpool.h5'
 	glove_p_filename = './data/word2vec_glove.6B.300d.pkl'
 	saved_qa_map_format = './data/qa_cache_{:s}.pkl'
-	checkpoint = './checkpoints/lr{:f}_wd{:f}.pt'.format(lr, wd)
+	# output files
+	file_format = './checkpoints/lr{:f}_wd{:f}_bts{:d}'.format(lr, wd, batch_size)
+	log_file = file_format + '.json'
+	checkpoint = file_format + '.pt'
 
 	# img_feat # TODO: split img features to be efficient
 	img_feats = h5py.File(img_feats_fname)
@@ -155,7 +159,7 @@ if __name__ == '__main__':
 	# train
 	train_qa_map = pickle.load(open(saved_qa_map_format.format('train'), 'rb')) if os.path.exists(saved_qa_map_format.format('train')) \
 		else preprocess.process_qas(json_filename_format.format('train'), glove_p_filename, save=saved_qa_map_format.format('train'))
-	train_loader = DataLoader(VQADataset(img_feats, train_qa_map), batch_size=1, shuffle=True)
+	train_loader = DataLoader(VQADataset(img_feats, train_qa_map), batch_size=batch_size, shuffle=True)
 	# val
 	val_qa_map = pickle.load(open(saved_qa_map_format.format('val'), 'rb')) if os.path.exists(saved_qa_map_format.format('val')) \
 		else preprocess.process_qas(json_filename_format.format('val'), glove_p_filename, save=saved_qa_map_format.format('val'))
@@ -175,9 +179,14 @@ if __name__ == '__main__':
 
 	n_epoch = 100
 	best_acc = 0
+	stats = {'train_loss':[]}
 	for e in range(n_epoch):
-		train(model, optim, train_loader)
+		stats['train_loss'] += train(model, optim, train_loader)
 		val_acc = eval(model, val_loader)
+
+		with open(log_file, "w") as handle:
+			json.dump(stats, handle)
+		
 		if val_acc > best_acc:
 			best_acc = val_acc
 			torch.save({'model': model.state_dict(), 'optim': optim.state_dict()}, checkpoint)
