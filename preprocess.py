@@ -13,17 +13,12 @@ WORD_DIM = 300
 #     pickle.dump(glove_model, f)
 
 def sent2vec(glove_embed, sentence, word_dim):
-	# v = []
 	v = np.array([]).reshape(0, word_dim)
 	for w in sentence:
-		try:
+		if w in glove_embed:
 			v = np.vstack((v, glove_embed[w]))
-			# v.append(glove_embed[w])
-		except KeyError as e:
-			# print(e)
-			# ise = True
-			# qv.append(np.random.rand(WORD_DIM,))
-			pass
+	if v.shape[0] == 0:
+		v = np.vstack((v, np.zeros_like(glove_embed['this'])))
 	return v
 
 def process_qas(json_filename, glove_p_filename, save=''):
@@ -33,15 +28,7 @@ def process_qas(json_filename, glove_p_filename, save=''):
 	qa_map = []
 	with open(json_filename) as file:
 		json_data = json.load(file)
-		# qa_data = []
-		# qa_id_list = []
-		# image_id_list = []
 		for img in json_data['images']:
-			# image_id_list.append(img["image_id"])
-			# if img['split'] == 'train':
-
-			# elif img['split'] == 'val':
-
 			for qapair in img['qa_pairs']:
 				# qa_id, image_id
 				# qa_id_list.append(qapair['qa_id'])
