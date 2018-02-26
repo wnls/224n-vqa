@@ -197,7 +197,7 @@ if __name__ == '__main__':
 	if use_pretrain and pretrained_path:
 		pretrained = torch.load(pretrained_path)
 		model.load_state_dict(pretrained['model'])
-		model.load_state_dict(pretrained['optim'])
+		optim.load_state_dict(pretrained['optim'])
 	if USE_GPU:
 		print("Use GPU")
 		model = model.cuda()
