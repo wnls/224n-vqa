@@ -24,11 +24,12 @@ FEAT_DIM = 2048
 WV_DIM = 300
 dtype = torch.FloatTensor
 # training
+n_epoch = 150
 print_every_train = 50
 print_every_val = 500
-batch_size = 32
-lr = 5e-4
-wd = 5e-4
+batch_size = 64
+lr = 5e-6
+wd = 5e-3
 
 
 class VQADataset(Dataset):
@@ -75,11 +76,10 @@ def train(model, optim, loader):
 
 	top1_cnt = 0
 	total_cnt = 0
-	stats = []
 	t_start = time()
 	for i,batch in enumerate(loader):
 		if i and i%print_every_train==0:
-			avg_loss = sum(stats[-print_every_train:])/print_every_train
+			avg_loss = sum(stats['train_loss'][-print_every_train:])/print_every_train
 			avg_time = (time()-t_start)/print_every_train
 			cur_acc = top1_cnt/total_cnt if total_cnt else -1
 			print('{:d}-{:d}: avg_loss={:f} / avg_time={:f}s / cur_acc={:f}'.format(i-print_every_train, i, avg_loss, avg_time, cur_acc))
@@ -106,14 +106,14 @@ def train(model, optim, loader):
 		# update stats
 		top1_cnt += sum(idx[:, 0]==0).data[0]
 		total_cnt += idx.size(0)
-		stats.append(loss.data[0])
+		stats['train_loss'].append(loss.data[0])
 		# backward
 		optim.zero_grad()
 		loss.backward()
 		optim.step()
-	print("train top@1 accuracy:", top1_cnt/total_cnt if total_cnt else "N/A")
-	return stats
-
+	acc = top1_cnt/total_cnt if total_cnt else -1
+	stats['train_acc'].append(acc)
+	print("train top@1 accuracy:", acc)
 
 
 def eval(model, loader):
@@ -150,16 +150,19 @@ def eval(model, loader):
 		top1_cnt += sum(idx[:, 0]==0).data[0]
 		total_cnt += idx.size(0)
 	acc = top1_cnt/total_cnt if total_cnt else -1
-	print("val top@1 accuracy:", -1)
+	stats['val_acc'].append(acc)
+	print("val top@1 accuracy:", acc)
 	return acc
 
 
 if __name__ == '__main__':
 	# input files
 	json_filename_format = './data/visual7w-telling_{:s}.json'
-	img_feats_fname = './data/resnet101_avgpool.h5'
+	img_feats_fname = './data/pretrain_test_resnet101_avgpool.h5'
 	glove_p_filename = './data/word2vec_glove.6B.300d.pkl'
 	saved_qa_map_format = './data/qa_cache_{:s}.pkl'
+	pretrained_path = './checkpoints/lr0.000005_wd0.005000_bts64.pt'
+	use_pretrain = True
 	# output files
 	out_dir = './checkpoints'
 	if not os.path.exists(out_dir):
@@ -169,7 +172,10 @@ if __name__ == '__main__':
 	checkpoint = file_format + '.pt'
 
 	# img_feat # TODO: split img features to be efficient
-	img_feats = h5py.File(img_feats_fname)
+        # NOTE: make a copy of the data in img_feats so that we can release the h5py file object
+	with h5py.File(img_feats_fname) as handle: 
+		img_feats = {key:np.asarray(handle[key]) for key in handle}
+	print('Finish loading img_feats.') # NOTE: indicating the file has been released
 
 	# train
 	train_qa_map = pickle.load(open(saved_qa_map_format.format('train'), 'rb')) if os.path.exists(saved_qa_map_format.format('train')) \
@@ -187,19 +193,23 @@ if __name__ == '__main__':
 
 	model = BOWModel(in_dim=2*WV_DIM+FEAT_DIM, out_dim=1, hidden_dims=[1024, 512, 512])
 	loss_fn = torch.nn.BCEWithLogitsLoss()
+	optim = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=wd)
+	if use_pretrain and pretrained_path:
+		pretrained = torch.load(pretrained_path)
+		model.load_state_dict(pretrained['model'])
+		model.load_state_dict(pretrained['optim'])
 	if USE_GPU:
 		print("Use GPU")
 		model = model.cuda()
 		loss_fn = loss_fn.cuda()
 	else:
 		print("Use CPU")
-	optim = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=wd)
 
-	n_epoch = 100
 	best_acc = 0
-	stats = {'train_loss':[]}
+	stats = {'train_loss':[], 'train_acc':[], 'val_acc':[]}
 	for e in range(n_epoch):
-		stats['train_loss'] += train(model, optim, train_loader)
+		print("\n\n==== Epoch {:d} ====".format(e+1))
+		train(model, optim, train_loader)
 		val_acc = eval(model, val_loader)
 
 		with open(log_file, "w") as handle:
