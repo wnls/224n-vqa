@@ -30,6 +30,11 @@ print_every_val = 500
 batch_size = 64
 lr = 5e-6
 wd = 5e-3
+# Exec related
+LOAD_TRAIN = False
+LOAD_VAL = False
+LOAD_TEST = True
+PERFORM_TRAIN = False
 
 
 class VQADataset(Dataset):
@@ -116,11 +121,12 @@ def train(model, optim, loader):
 	print("train top@1 accuracy:", acc)
 
 
-def eval(model, loader):
+def eval(model, loader, update_stats=False, save=''):
 	model.eval()
 
 	top1_cnt = 0
 	total_cnt = 0
+	top1_result = []
 	t_start = time()
 	for i,batch in enumerate(loader):
 		if i and i%print_every_val==0:
@@ -149,9 +155,14 @@ def eval(model, loader):
 		# update stats
 		top1_cnt += sum(idx[:, 0]==0).data[0]
 		total_cnt += idx.size(0)
+		top1_result.append((idx[:, 0] == 0).cpu().data.numpy())
 	acc = top1_cnt/total_cnt if total_cnt else -1
-	stats['val_acc'].append(acc)
+	if update_stats:
+		stats['val_acc'].append(acc)
 	print("val top@1 accuracy:", acc)
+	if save:
+		with open(save, 'wb') as fout:
+			np.save(fout, np.concatenate(top1_result))
 	return acc
 
 
@@ -177,18 +188,21 @@ if __name__ == '__main__':
 		img_feats = {key:np.asarray(handle[key]) for key in handle}
 	print('Finish loading img_feats.') # NOTE: indicating the file has been released
 
-	# train
-	train_qa_map = pickle.load(open(saved_qa_map_format.format('train'), 'rb')) if os.path.exists(saved_qa_map_format.format('train')) \
-		else preprocess.process_qas(json_filename_format.format('train'), glove_p_filename, save=saved_qa_map_format.format('train'))
-	train_loader = DataLoader(VQADataset(img_feats, train_qa_map), batch_size=batch_size, shuffle=True)
-	# val
-	val_qa_map = pickle.load(open(saved_qa_map_format.format('val'), 'rb')) if os.path.exists(saved_qa_map_format.format('val')) \
-		else preprocess.process_qas(json_filename_format.format('val'), glove_p_filename, save=saved_qa_map_format.format('val'))
-	val_loader = DataLoader(VQADataset(img_feats, val_qa_map), batch_size=1, shuffle=False)
-	# test
-	test_qa_map = pickle.load(open(saved_qa_map_format.format('test'), 'rb')) if os.path.exists(saved_qa_map_format.format('test')) \
-		else preprocess.process_qas(json_filename_format.format('test'), glove_p_filename, save=saved_qa_map_format.format('test'))
-	test_loader = DataLoader(VQADataset(img_feats, test_qa_map), batch_size=1, shuffle=False)
+	if LOAD_TRAIN:
+		# train
+		train_qa_map = pickle.load(open(saved_qa_map_format.format('train'), 'rb')) if os.path.exists(saved_qa_map_format.format('train')) \
+			else preprocess.process_qas(json_filename_format.format('train'), glove_p_filename, save=saved_qa_map_format.format('train'))
+		train_loader = DataLoader(VQADataset(img_feats, train_qa_map), batch_size=batch_size, shuffle=True)
+	if LOAD_VAL:
+		# val
+		val_qa_map = pickle.load(open(saved_qa_map_format.format('val'), 'rb')) if os.path.exists(saved_qa_map_format.format('val')) \
+			else preprocess.process_qas(json_filename_format.format('val'), glove_p_filename, save=saved_qa_map_format.format('val'))
+		val_loader = DataLoader(VQADataset(img_feats, val_qa_map), batch_size=1, shuffle=False)
+	if LOAD_TEST:
+		# test
+		test_qa_map = pickle.load(open(saved_qa_map_format.format('test'), 'rb')) if os.path.exists(saved_qa_map_format.format('test')) \
+			else preprocess.process_qas(json_filename_format.format('test'), glove_p_filename, save=saved_qa_map_format.format('test'))
+		test_loader = DataLoader(VQADataset(img_feats, test_qa_map), batch_size=1, shuffle=False)
 
 
 	model = BOWModel(in_dim=2*WV_DIM+FEAT_DIM, out_dim=1, hidden_dims=[1024, 512, 512])
@@ -205,16 +219,21 @@ if __name__ == '__main__':
 	else:
 		print("Use CPU")
 
-	best_acc = 0
-	stats = {'train_loss':[], 'train_acc':[], 'val_acc':[]}
-	for e in range(n_epoch):
-		print("\n\n==== Epoch {:d} ====".format(e+1))
-		train(model, optim, train_loader)
-		val_acc = eval(model, val_loader)
+	if PERFORM_TRAIN:
+		best_acc = 0
+		stats = {'train_loss':[], 'train_acc':[], 'val_acc':[]}
+		for e in range(n_epoch):
+			print("\n\n==== Epoch {:d} ====".format(e+1))
+			train(model, optim, train_loader)
+			val_acc = eval(model, val_loader, update_stats=True)
+	
+			with open(log_file, "w") as handle:
+				json.dump(stats, handle)
+			
+			if val_acc > best_acc:
+				best_acc = val_acc
+				torch.save({'model': model.state_dict(), 'optim': optim.state_dict()}, checkpoint)
 
-		with open(log_file, "w") as handle:
-			json.dump(stats, handle)
-		
-		if val_acc > best_acc:
-			best_acc = val_acc
-			torch.save({'model': model.state_dict(), 'optim': optim.state_dict()}, checkpoint)
+	# Evaluate on test set
+	print("Evaluating on test set...")
+	eval(model, test_loader, save='bow_test_top1.npy')
