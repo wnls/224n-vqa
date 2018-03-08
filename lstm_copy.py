@@ -27,7 +27,7 @@ dtype = torch.FloatTensor
 n_epoch = 150
 print_every_train = 50
 print_every_val = 500
-batch_size = 64
+batch_size = 1
 lr = 5e-6
 wd = 5e-3
 # Exec related
@@ -56,15 +56,26 @@ class VQADataset(Dataset):
 		"""
 		# return np.stack([q_embed for i in range(4)]), np.stack([a_embed for a_embed in a_embeds]), np.tile(np.asarray(self.img_features[img_id]), [4,1]), np.asarray([1,0,0,0]).reshape(4,1)
 		qa_embeds = []
+		l_max = max([a_embed.shape[0] for a_embed in a_embeds])
 		for a_embed in a_embeds:
-			qa_embeds.append(np.vstack((q_embed, a_embed)))
-		return qa_embeds, np.tile(np.asarray(self.img_features[img_id]), [4,1]), np.asarray([1,0,0,0]).reshape(4,1)
+			padded_a_embed = np.concatenate([a_embed, np.zeros([l_max-a_embed.shape[0], 300])], 0)
+			qa_embeds.append(np.vstack((q_embed, padded_a_embed)))
+		qa_encode = np.stack(qa_embeds, 0)
+		img_encode = np.tile(np.asarray(self.img_features[img_id]), [4,1])
+		# print('qa_encode shape:', qa_encode.shape)
+		# print('img_encode shape:',img_encode.shape)
+		sys.stdout.flush()
+		return qa_encode, img_encode, np.asarray([1,0,0,0]).reshape(4,1)
 		# return np.tile(q_embed.mean(0), [4,1]), np.stack([a_embed.mean(0) for a_embed in a_embeds]), np.tile(np.asarray(self.img_features[img_id]), [4,1]), np.asarray([1,0,0,0]).reshape(4,1)
 
 	def __len__(self):
 		return len(self.qa_map)
 
 def pad_collate_fn(batch):
+	"""
+	Input: batch: list
+	Output:
+	"""
 	# max_len = max(batch, key=lambda tp: max(tp[0], key=lambda li: ))
 	# max_len = max([max(tp[0], key=lambda a: a.shape[0]) for tp in batch])
 	qa_embeds = [qa_embed for tp in batch for qa_embed in tp[0]]
@@ -83,29 +94,40 @@ def pad_collate_fn(batch):
 	return batch
 
 class LSTMModel(nn.Module):
-	def __init__(self, in_dim, hidden_dim, out_dim, mlp_dims=[], n_layers=1, dropout=0):
+	def __init__(self, visual_dim, lang_dim, hidden_dim, out_dim=1, mlp_dims=[], n_layers=1, dropout=0):
 		super(LSTMModel, self).__init__()
 		#self.drop = nn.Dropout(dropout)
 
-		self.lstm = nn.LSTM(in_dim, hidden_dim, n_layers)
+		self.lstm = nn.LSTM(lang_dim, hidden_dim, n_layers)
+		self.visual_dim = visual_dim
+		self.lang_dim = lang_dim
+		self.hidden_dim = hidden_dim
+		self.n_layers = n_layers
+		self.batch_size = 4 # TODO: hard coded
 		self.hidden = self.init_hidden()
 
 		layers = []
-		dims = [hidden_dim] + mlp_dims + [out_dim]
+		dims = [hidden_dim+visual_dim] + mlp_dims + [out_dim]
 		for i in range(len(dims)-1):
 			layers += nn.Linear(dims[i], dims[i+1]),
 			if i != len(dims)-2:
 				# i.e. no ReLU at the last layer
 				layers += nn.ReLU(),
-		self.hidden2out = nn.Sequential(*layers)
+		self.mlp = nn.Sequential(*layers)
 
 	def init_hidden(self):
 		#TODO batch size
-		return Variable(torch.rand(self.n_layers, self.batch_size, self.hidden_dim))
+		return (Variable(torch.rand(self.n_layers, self.batch_size, self.hidden_dim)),
+			Variable(torch.rand(self.n_layers, self.batch_size, self.hidden_dim)))
 
-	def forward(self, inputs):
-		out, self.hidden = self.lstm(inputs, self.hidden)
-		out = self.hidden2out(out)
+	def forward(self, lang_input, img_input):
+		lang_input = torch.transpose(lang_input, 0, 1)
+		self.hidden = self.init_hidden()
+		out, (h_t, c_t) = self.lstm(lang_input, self.hidden) # h_t: (1, batch (i.e. 4*real_batch), hidden_size)
+		h_t = h_t.squeeze(0)
+		assert(h_t.size(0) == img_input.size(0)), "size mismatch: h_t: {} / img_input: {}".format(h_t.size(), img_input.size())
+		mlp_input = torch.cat([h_t, img_input], 1)
+		out = self.mlp(mlp_input) # batch * 1
 		return out
 
 
@@ -125,27 +147,26 @@ def train(model, optim, loader):
 			t_start = time()
 
 		# unroll a batch
-		q_embed, a_embeds, img_feats, gt = batch
+		qa_embeds, img_feats, gt = batch
 		# Variable for autograd
-		q_embed_var = Variable(q_embed.view(q_embed.size(0)*q_embed.size(1), q_embed.size(2), q_embed.size(3))).type(dtype) # Variable(q_embed.mean(1)).type(dtype)
-		img_feats_var = Variable(img_feats.view(img_feats.size(0)*img_feats.size(1), img_feats.size(2), img_feats.size(3))).type(dtype)
-		a_embeds_var = Variable(a_embeds.view(a_embeds.size(0)*a_embeds.size(1), a_embeds.size(2))).type(dtype) # [Variable(a_embed).type(dtype) for a_embed in a_embeds] # [Variable(a_embed.mean(1)).type(dtype) for a_embed in a_embeds]
+		qa_embeds_var = Variable(qa_embeds.view(qa_embeds.size(0)*qa_embeds.size(1), qa_embeds.size(2), qa_embeds.size(3))).type(dtype) # Variable(q_embed.mean(1)).type(dtype)
+		img_feats_var = Variable(img_feats.view(img_feats.size(0)*img_feats.size(1), img_feats.size(2))).type(dtype)
 		gt_var = Variable(gt.view(gt.size(0)*gt.size(1), gt.size(2))).type(dtype)
-		# Concatenate features: question + img + answers
-		concated_qa = torch.cat([q_embed_var, a_embeds_var], dim=2)
 		if USE_GPU:
-			concated = concated.cuda()
 			gt_var = gt_var.cuda()
 
 		#TODO padding
 		
 		# forward
-		out = model(concated_qa)
-		_, idx = out.view(q_embed.size(0), q_embed.size(1)).sort(dim=1, descending=True)
+		out = model(qa_embeds_var, img_feats_var)
+		# gt_var: 4 * 1
+		# out: 4 * 1
 		loss = loss_fn(out, gt_var)
+		_, idx = out.view(-1).sort(descending=True)
 		# update stats
-		top1_cnt += sum(idx[:, 0]==0).data[0]
-		total_cnt += idx.size(0)
+		if idx.data[0]==0:
+			top1_cnt += 1 # NOTE: batch size hard coded as 1
+		total_cnt += 1
 		stats['train_loss'].append(loss.data[0])
 		# backward
 		optim.zero_grad()
@@ -172,25 +193,27 @@ def eval(model, loader, update_stats=False, save=''):
 			t_start = time()
 
 		# unroll a batch
-		q_embed, a_embeds, img_feats, gt = batch
+		qa_embeds, img_feats, gt = batch
 		# Variable for autograd
-		q_embed_var = Variable(q_embed.view(q_embed.size(0)*q_embed.size(1), q_embed.size(2))).type(dtype) # Variable(q_embed.mean(1)).type(dtype)
+		qa_embeds_var = Variable(qa_embeds.view(qa_embeds.size(0)*qa_embeds.size(1), qa_embeds.size(2), qa_embeds.size(3))).type(dtype) # Variable(q_embed.mean(1)).type(dtype)
 		img_feats_var = Variable(img_feats.view(img_feats.size(0)*img_feats.size(1), img_feats.size(2))).type(dtype)
-		a_embeds_var = Variable(a_embeds.view(a_embeds.size(0)*a_embeds.size(1), a_embeds.size(2))).type(dtype) # [Variable(a_embed).type(dtype) for a_embed in a_embeds] # [Variable(a_embed.mean(1)).type(dtype) for a_embed in a_embeds]
 		gt_var = Variable(gt.view(gt.size(0)*gt.size(1), gt.size(2))).type(dtype)
-		# Concatenate features: question + img + answers
-		concated = torch.cat([q_embed_var, img_feats_var, a_embeds_var], dim=1)
 		if USE_GPU:
-			concated = concated.cuda()
 			gt_var = gt_var.cuda()
 
+		#TODO padding
+		
 		# forward
-		out = model(concated)
-		_, idx = out.view(q_embed.size(0), q_embed.size(1)).sort(dim=1, descending=True)
+		out = model(qa_embeds_var, img_feats_var)
+		# gt_var: 4 * 1
+		# out: 4 * 1
+		loss = loss_fn(out, gt_var)
+		_, idx = out.view(-1).sort(descending=True)
 		# update stats
-		top1_cnt += sum(idx[:, 0]==0).data[0]
-		total_cnt += idx.size(0)
-		top1_result.append((idx[:, 0] == 0).cpu().data.numpy())
+		if idx.data[0]==0:
+			top1_cnt += 1 # NOTE: batch size hard coded as 1
+		total_cnt += 1
+		top1_result.append(idx.data[0] == 0)
 	acc = top1_cnt/total_cnt if total_cnt else -1
 	if update_stats:
 		stats['val_acc'].append(acc)
@@ -227,7 +250,7 @@ if __name__ == '__main__':
 		# train
 		train_qa_map = pickle.load(open(saved_qa_map_format.format('train'), 'rb')) if os.path.exists(saved_qa_map_format.format('train')) \
 			else preprocess.process_qas(json_filename_format.format('train'), glove_p_filename, save=saved_qa_map_format.format('train'))
-		train_loader = DataLoader(VQADataset(img_feats, train_qa_map), batch_size=batch_size, shuffle=True, collate_fn=pad_collate_fn)
+		train_loader = DataLoader(VQADataset(img_feats, train_qa_map), batch_size=batch_size, shuffle=True) #, collate_fn=pad_collate_fn)
 	if LOAD_VAL:
 		# val
 		val_qa_map = pickle.load(open(saved_qa_map_format.format('val'), 'rb')) if os.path.exists(saved_qa_map_format.format('val')) \
@@ -240,7 +263,7 @@ if __name__ == '__main__':
 		test_loader = DataLoader(VQADataset(img_feats, test_qa_map), batch_size=1, shuffle=False)
 
 
-	model = LSTMModel(in_dim=2*WV_DIM+FEAT_DIM, out_dim=1, hidden_dims=[1024, 512, 512])
+	model = LSTMModel(visual_dim=FEAT_DIM, lang_dim=WV_DIM, hidden_dim=WV_DIM, out_dim=1, mlp_dims=[1024, 512, 512])
 	loss_fn = torch.nn.BCEWithLogitsLoss()
 	optim = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=wd)
 	if use_pretrain and pretrained_path:
