@@ -16,6 +16,7 @@ import pickle
 import json
 # self-defined modules
 import preprocess
+from datetime import datetime
 
 # system
 USE_GPU = torch.cuda.is_available()
@@ -28,8 +29,8 @@ n_epoch = 150
 print_every_train = 50
 print_every_val = 500
 batch_size = 1
-lr = 5e-6
-wd = 5e-3
+lr = 5e-7
+wd = 5e-4
 # Exec related
 LOAD_TRAIN = True
 LOAD_VAL = True
@@ -117,8 +118,12 @@ class LSTMModel(nn.Module):
 
 	def init_hidden(self):
 		#TODO batch size
-		return (Variable(torch.rand(self.n_layers, self.batch_size, self.hidden_dim)),
-			Variable(torch.rand(self.n_layers, self.batch_size, self.hidden_dim)))
+		if USE_GPU:
+			return (Variable(torch.rand(self.n_layers, self.batch_size, self.hidden_dim)).cuda(),
+				Variable(torch.rand(self.n_layers, self.batch_size, self.hidden_dim)).cuda())
+		else:
+			return (Variable(torch.rand(self.n_layers, self.batch_size, self.hidden_dim)),
+				Variable(torch.rand(self.n_layers, self.batch_size, self.hidden_dim)))
 
 	def forward(self, lang_input, img_input):
 		lang_input = torch.transpose(lang_input, 0, 1)
@@ -153,6 +158,8 @@ def train(model, optim, loader):
 		img_feats_var = Variable(img_feats.view(img_feats.size(0)*img_feats.size(1), img_feats.size(2))).type(dtype)
 		gt_var = Variable(gt.view(gt.size(0)*gt.size(1), gt.size(2))).type(dtype)
 		if USE_GPU:
+			qa_embeds_var = qa_embeds_var.cuda()
+			img_feats_var = img_feats_var.cuda()
 			gt_var = gt_var.cuda()
 
 		#TODO padding
@@ -199,6 +206,8 @@ def eval(model, loader, update_stats=False, save=''):
 		img_feats_var = Variable(img_feats.view(img_feats.size(0)*img_feats.size(1), img_feats.size(2))).type(dtype)
 		gt_var = Variable(gt.view(gt.size(0)*gt.size(1), gt.size(2))).type(dtype)
 		if USE_GPU:
+			qa_embeds_var = qa_embeds_var.cuda()
+			img_feats_var = img_feats_var.cuda()
 			gt_var = gt_var.cuda()
 
 		#TODO padding
@@ -236,7 +245,8 @@ if __name__ == '__main__':
 	out_dir = './checkpoints'
 	if not os.path.exists(out_dir):
 		os.mkdir(out_dir)
-	file_format = os.path.join(out_dir, 'lr{:f}_wd{:f}_bts{:d}'.format(lr, wd, batch_size))
+	now = datetime.now()
+	file_format = os.path.join(out_dir, 'lr{:f}_wd{:f}_bts{:d}_mon{:d}day{:d}h{:d}m{:d}s{:d}'.format(lr, wd, batch_size, now.month, now.day, now.hour, now.minute, now.second))
 	log_file = file_format + '.json'
 	checkpoint = file_format + '.pt'
 
