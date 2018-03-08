@@ -37,7 +37,7 @@ LOAD_VAL = True
 LOAD_TEST = True
 PERFORM_TRAIN = True
 
-softmax = nn.Softmax()
+softmax = nn.Softmax(dim=0)
 
 class VQADataset(Dataset):
 	def __init__(self, img_features, qa_map):
@@ -170,6 +170,9 @@ def train(model, optim, loader):
 			y_rank = Variable(torch.Tensor([1,1,1]))
 			if USE_GPU:
 				y_rank = y_rank.cuda()
+			print('pos:', out[0].expand(3))
+			print('neg:', out[1:])
+			print('y_rank:', y_rank)
 			loss = loss_fn(out[0].expand(3), out[1:], y_rank)
 			print(loss)
 		_, idx = out.view(-1).sort(descending=True)
