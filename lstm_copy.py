@@ -24,6 +24,7 @@ FEAT_DIM = 2048
 WV_DIM = 300
 dtype = torch.FloatTensor
 # training
+LOSS = 'rank'
 n_epoch = 150
 print_every_train = 50
 print_every_val = 500
@@ -36,6 +37,7 @@ LOAD_VAL = True
 LOAD_TEST = True
 PERFORM_TRAIN = True
 
+softmax = nn.Softmax()
 
 class VQADataset(Dataset):
 	def __init__(self, img_features, qa_map):
@@ -159,9 +161,17 @@ def train(model, optim, loader):
 		
 		# forward
 		out = model(qa_embeds_var, img_feats_var)
-		# gt_var: 4 * 1
-		# out: 4 * 1
-		loss = loss_fn(out, gt_var)
+		if LOSS == 'BCE':
+			# gt_var: 4 * 1
+			# out: 4 * 1
+			loss = loss_fn(out, gt_var)
+		elif LOSS == 'rank':
+			out = softmax(out)
+			y_rank = Variable(torch.Tensor([1,1,1]))
+			if USE_GPU:
+				y_rank = y_rank.cuda()
+			loss = loss_fn(out[0].expand(3), out[1:], y_rank)
+			print(loss)
 		_, idx = out.view(-1).sort(descending=True)
 		# update stats
 		if idx.data[0]==0:
@@ -264,7 +274,10 @@ if __name__ == '__main__':
 
 
 	model = LSTMModel(visual_dim=FEAT_DIM, lang_dim=WV_DIM, hidden_dim=WV_DIM, out_dim=1, mlp_dims=[1024, 512, 512])
-	loss_fn = torch.nn.BCEWithLogitsLoss()
+	if LOSS == 'BCE':
+		loss_fn = torch.nn.BCEWithLogitsLoss()
+	elif LOSS == 'rank':
+		loss_fn = torch.nn.MarginRankingLoss()
 	optim = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=wd)
 	if use_pretrain and pretrained_path:
 		pretrained = torch.load(pretrained_path)
