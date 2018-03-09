@@ -141,11 +141,11 @@ class LSTMModel(nn.Module):
 	def init_hidden(self, batch_size):
 		#TODO batch size
 		if USE_GPU:
-			return (Variable(torch.rand(self.n_layers, batch_size, self.hidden_dim)).cuda(),
-					Variable(torch.rand(self.n_layers, batch_size, self.hidden_dim)).cuda())
+			return (Variable(torch.zeros(self.n_layers, batch_size, self.hidden_dim)).cuda(),
+					Variable(torch.zeros(self.n_layers, batch_size, self.hidden_dim)).cuda())
 		else:
-			return (Variable(torch.rand(self.n_layers, batch_size, self.hidden_dim)),
-					Variable(torch.rand(self.n_layers, batch_size, self.hidden_dim)))
+			return (Variable(torch.zeros(self.n_layers, batch_size, self.hidden_dim)),
+					Variable(torch.zeros(self.n_layers, batch_size, self.hidden_dim)))
 
 	def forward(self, lang_input, img_input, seq_lens):
 		# lang_input: (batch, seq_len, WD), want (seq_len, batch, WD)
