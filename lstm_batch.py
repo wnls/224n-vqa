@@ -117,16 +117,18 @@ def pad_collate_fn(batch):
 	return seq_lens, indices, qa_embeds_padded, img_feats[indices], labels[indices]
 
 class LSTMModel(nn.Module):
-	def __init__(self, visual_dim, lang_dim, hidden_dim, out_dim=1, mlp_dims=[], n_layers=1, dropout=0):
+	def __init__(self, visual_dim, lang_dim, hidden_dim, out_dim=1, mlp_dims=[], bidirectional=False, n_layers=1, dropout=0):
 		super(LSTMModel, self).__init__()
 		#self.drop = nn.Dropout(dropout)
 
-		self.lstm = nn.LSTM(lang_dim, hidden_dim, n_layers, batch_first=True)
+		self.lstm = nn.LSTM(lang_dim, hidden_dim, n_layers, batch_first=True, bidirectional=bidirectional)
 		self.visual_dim = visual_dim
 		self.lang_dim = lang_dim
 		self.hidden_dim = hidden_dim
 		self.n_layers = n_layers
-		# self.batch_size = 4 * batch_size # TODO: hard coded
+		self.bidirectional = bidirectional
+        
+        # self.batch_size = 4 * batch_size # TODO: hard coded
 		# self.hidden = self.init_hidden()
 
 		layers = []
@@ -152,9 +154,12 @@ class LSTMModel(nn.Module):
 		# lang_input = torch.transpose(lang_input, 0, 1)
 		lang_input_packed = nn.utils.rnn.pack_padded_sequence(lang_input, list(seq_lens), batch_first=True)
 
-		self.hidden = self.init_hidden(lang_input.size(0)) #TODO needed?
-		out, (h_t, c_t) = self.lstm(lang_input_packed, self.hidden) # h_t: (1, batch (i.e. 4*real_batch), hidden_size)
-		h_t = h_t.squeeze(0)
+		# self.hidden = self.init_hidden(lang_input.size(0))
+		# hidden size zeros by default
+		out, (h_t, c_t) = self.lstm(lang_input_packed) # h_t: (1, batch (i.e. 4*real_batch), hidden_size)
+		h_t = h_t.squeeze(0) # squeeze out n_layers
+		if self.bidirectional:
+			h_t = torch.mean(h_t, 0)
 		assert(h_t.size(0) == img_input.size(0)), "size mismatch: h_t: {} / img_input: {}".format(h_t.size(), img_input.size())
 		mlp_input = torch.cat([h_t, img_input], 1)
 		out = self.mlp(mlp_input) # batch * 1
@@ -296,7 +301,7 @@ if __name__ == '__main__':
 		test_loader = DataLoader(VQADataset(img_feats, test_qa_map), batch_size=batch_size, shuffle=False, collate_fn=pad_collate_fn)
 
 
-	model = LSTMModel(visual_dim=FEAT_DIM, lang_dim=WV_DIM, hidden_dim=WV_DIM, out_dim=1, mlp_dims=[1024, 512, 512])
+	model = LSTMModel(visual_dim=FEAT_DIM, lang_dim=WV_DIM, hidden_dim=WV_DIM, out_dim=1, mlp_dims=[1024, 512, 512], bidirectional=True)
 	loss_fn = torch.nn.BCEWithLogitsLoss()
 	optim = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=wd)
 	if use_pretrain and pretrained_path:
