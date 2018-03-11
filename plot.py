@@ -2,18 +2,19 @@ import matplotlib.pyplot as plt
 import json
 import numpy as np
 
-with open('./checkpoints/lr0.000000_wd0.000500_bts1_mon3day8h8m20s22.json') as file:
-	data = json.load(file)
-	
-	train_loss = data['train_loss']
-	train_acc = data['train_acc']
-	val_acc = data['val_acc']
-# with open('./checkpoints/lr5e-07_wd0.0005_bts64_m3d9h5m39s15_continue.json') as file:
-# 	data = json.load(file)
-	
-# 	train_loss.extend(data['train_loss'])
-# 	train_acc.extend(data['train_acc'])
-# 	val_acc.extend(data['val_acc'])
+path = './checkpoints/'
+files = ['bi_lr2e-06_wd0.0005_bts128_m3d10h9m47s31_continue.json','bi_lr5e-06_wd0.0005_bts128_ep300_0310202638_continue2.json']
+
+train_loss = []
+train_acc = []
+val_acc = []
+
+for fname in files:
+	with open(path+fname) as f:
+		data = json.load(f)
+		train_loss.extend(data['train_loss'])
+		train_acc.extend(data['train_acc'])
+		val_acc.extend(data['val_acc'])
 
 def smooth(y, box_pts):
     box = np.ones(box_pts)/box_pts
@@ -22,9 +23,10 @@ def smooth(y, box_pts):
 
 # # plt.plot(train_loss,'o')
 # plt.plot(train_loss[::10], 'r-', lw=2)
-s = smooth(train_loss[::20],100)
+s = smooth(train_loss[::10],20)
+plt.plot(s, 'g-', lw=1)
 # plt.plot(train_loss[::10], 'g-', lw=1)
-plt.plot([i for i in s if i >0.3], 'g-', lw=1)
+# plt.plot([i for i in s if i >0.3], 'g-', lw=1)
 # y = savitzky_golay(train_loss, 51, 3)
 # plt.plot(y, 'r-', lw=2)
 # print(len(train_loss))
