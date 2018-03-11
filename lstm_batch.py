@@ -8,7 +8,7 @@ from torch.utils.data import DataLoader, Dataset
 # system utils
 import os
 import sys
-from time import time
+import time
 from datetime import datetime
 # data utils
 import numpy as np
@@ -18,6 +18,8 @@ import json
 # self-defined modules
 import preprocess
 
+t_start_total = time.time()
+
 # system
 USE_GPU = torch.cuda.is_available()
 # data
@@ -25,17 +27,29 @@ FEAT_DIM = 2048
 WV_DIM = 300
 dtype = torch.FloatTensor
 # training
-n_epoch = 150
+n_epoch = 300
 print_every_train = 50
 print_every_val = 100
-batch_size = 64
-lr = 5e-6
-wd = 5e-3
+batch_size = 128
+lr = 2e-6
+wd = 5e-4
+bidir = False
 # Exec related
 LOAD_TRAIN = True
 LOAD_VAL = True
 LOAD_TEST = True
 PERFORM_TRAIN = True
+use_pretrain = True
+pretrained_path = './checkpoints/lr5e-06_wd0.0005_bts128_ep300_0310202411_continue4.pt'
+# output files
+out_dir = './checkpoints'
+if not os.path.exists(out_dir):
+	os.mkdir(out_dir)
+now = datetime.now()
+file_format = os.path.join(out_dir, '{}lr{}_wd{}_bts{:d}_ep{:d}_{}'
+                           .format("bi_" if bidir else "", lr, wd, batch_size, n_epoch, time.strftime("%m%d%H%M%S")))
+log_file = file_format + '_continue5.json'
+checkpoint = file_format + '_continue5.pt'
 
 
 class VQADataset(Dataset):
@@ -156,10 +170,9 @@ class LSTMModel(nn.Module):
 
 		# self.hidden = self.init_hidden(lang_input.size(0))
 		# hidden size zeros by default
-		out, (h_t, c_t) = self.lstm(lang_input_packed) # h_t: (1, batch (i.e. 4*real_batch), hidden_size)
-		h_t = h_t.squeeze(0) # squeeze out n_layers
-		if self.bidirectional:
-			h_t = torch.mean(h_t, 0)
+		out, (h_t, c_t) = self.lstm(lang_input_packed) # h_t: (num_layers * num_directions, batch_size, hidden_size)
+		# h_t = h_t.squeeze(0) # squeeze out n_layers
+		h_t = torch.mean(h_t, 0)
 		assert(h_t.size(0) == img_input.size(0)), "size mismatch: h_t: {} / img_input: {}".format(h_t.size(), img_input.size())
 		mlp_input = torch.cat([h_t, img_input], 1)
 		out = self.mlp(mlp_input) # batch * 1
@@ -171,15 +184,15 @@ def train(model, optim, loader):
 
 	top1_cnt = 0
 	total_cnt = 0
-	t_start = time()
+	t_start = time.time()
 	for i,batch in enumerate(loader):
 		if i and i%print_every_train==0:
 			avg_loss = sum(stats['train_loss'][-print_every_train:])/print_every_train
-			avg_time = (time()-t_start)/print_every_train
+			avg_time = (time.time()-t_start)/print_every_train
 			cur_acc = top1_cnt/total_cnt if total_cnt else -1
 			print('{:d}-{:d}: avg_loss={:f} / avg_time={:f}s / cur_acc={:f}'.format(i-print_every_train, i, avg_loss, avg_time, cur_acc))
 			sys.stdout.flush()
-			t_start = time()
+			t_start = time.time()
 
 		# unroll a batch
 		seq_lens, indices, qa_embeds, img_feats, gt = batch
@@ -219,14 +232,14 @@ def eval(model, loader, update_stats=False, save=''):
 	top1_cnt = 0
 	total_cnt = 0
 	top1_result = []
-	t_start = time()
+	t_start = time.time()
 	for i,batch in enumerate(loader):
 		if i and i%print_every_val==0:
-			avg_time = (time()-t_start)/print_every_val
+			avg_time = (time.time()-t_start)/print_every_val
 			cur_acc = top1_cnt/total_cnt if total_cnt else -1
 			print('{:d}-{:d}: avg_time={:f}s / cur_acc={:f}'.format(i-print_every_val, i, avg_time, cur_acc))
 			sys.stdout.flush()
-			t_start = time()
+			t_start = time.time()
 
 		# unroll a batch
 		seq_lens, indices, qa_embeds, img_feats, gt = batch
@@ -266,17 +279,6 @@ if __name__ == '__main__':
 	img_feats_fname = './data/resnet101_avgpool.h5'
 	glove_p_filename = './data/word2vec_glove.6B.300d.pkl'
 	saved_qa_map_format = './data/qa_cache_{:s}.pkl'
-	pretrained_path = './checkpoints/lr0.000005_wd0.005000_bts64.pt'
-	use_pretrain = False
-	# output files
-	out_dir = './checkpoints'
-	if not os.path.exists(out_dir):
-		os.mkdir(out_dir)
-	now = datetime.now()
-	file_format = os.path.join(out_dir, 'lr{}_wd{}_bts{:d}_m{:d}d{:d}h{:d}m{:d}s{:d}'
-                               .format(lr, wd, batch_size, now.month, now.day, now.hour, now.minute, now.second))
-	log_file = file_format + '.json'
-	checkpoint = file_format + '.pt'
 
 	# img_feat # TODO: split img features to be efficient
         # NOTE: make a copy of the data in img_feats so that we can release the h5py file object
@@ -301,7 +303,7 @@ if __name__ == '__main__':
 		test_loader = DataLoader(VQADataset(img_feats, test_qa_map), batch_size=batch_size, shuffle=False, collate_fn=pad_collate_fn)
 
 
-	model = LSTMModel(visual_dim=FEAT_DIM, lang_dim=WV_DIM, hidden_dim=WV_DIM, out_dim=1, mlp_dims=[1024, 512, 512], bidirectional=True)
+	model = LSTMModel(visual_dim=FEAT_DIM, lang_dim=WV_DIM, hidden_dim=WV_DIM, out_dim=1, mlp_dims=[1024, 512, 512], bidirectional=bidir)
 	loss_fn = torch.nn.BCEWithLogitsLoss()
 	optim = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=wd)
 	if use_pretrain and pretrained_path:
@@ -319,6 +321,7 @@ if __name__ == '__main__':
 		best_acc = 0
 		stats = {'train_loss':[], 'train_acc':[], 'val_acc':[]}
 		for e in range(n_epoch):
+			t_start_ep = time.time()
 			print("\n\n==== Epoch {:d} ====".format(e+1))
 			train(model, optim, train_loader)
 			val_acc = eval(model, val_loader, update_stats=True)
@@ -329,7 +332,11 @@ if __name__ == '__main__':
 			if val_acc > best_acc:
 				best_acc = val_acc
 				torch.save({'model': model.state_dict(), 'optim': optim.state_dict()}, checkpoint)
+			print("Time taken: {}m".format((time.time()-t_start_ep)/60))
 
 	# Evaluate on test set
-	print("Evaluating on test set...")
+	print("\nEvaluating on test set...")
 	eval(model, test_loader, save='bow_test_top1.npy')
+
+	print("\nTotal Time: {}h".format((time.time()-t_start_total)/60/60))
+	print(log_file)
