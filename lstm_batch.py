@@ -31,25 +31,27 @@ n_epoch = 300
 print_every_train = 50
 print_every_val = 100
 batch_size = 128
-lr = 2e-6
+lr = 5e-7
 wd = 5e-4
-bidir = False
+bidir = True
+img2seq = False
 # Exec related
 LOAD_TRAIN = True
 LOAD_VAL = True
 LOAD_TEST = True
 PERFORM_TRAIN = True
-use_pretrain = True
-pretrained_path = './checkpoints/lr5e-06_wd0.0005_bts128_ep300_0310202411_continue4.pt'
+use_pretrain = False
+pretrained_path = './checkpoints/bi_lr5e-07_wd0.0005_bts128_ep100_0311201826_continue5.pt'
 # output files
 out_dir = './checkpoints'
 if not os.path.exists(out_dir):
 	os.mkdir(out_dir)
 now = datetime.now()
-file_format = os.path.join(out_dir, '{}lr{}_wd{}_bts{:d}_ep{:d}_{}'
-                           .format("bi_" if bidir else "", lr, wd, batch_size, n_epoch, time.strftime("%m%d%H%M%S")))
-log_file = file_format + '_continue5.json'
-checkpoint = file_format + '_continue5.pt'
+file_format = os.path.join(out_dir, '{}{}lr{}_wd{}_bts{:d}_ep{:d}_{}'
+                           .format("bi_" if bidir else "", "img_" if img2seq else "",
+								   lr, wd, batch_size, n_epoch, time.strftime("%m%d%H%M%S")))
+log_file = file_format + '_continue6.json'
+checkpoint = file_format + '_continue6.pt'
 
 
 class VQADataset(Dataset):
@@ -131,7 +133,7 @@ def pad_collate_fn(batch):
 	return seq_lens, indices, qa_embeds_padded, img_feats[indices], labels[indices]
 
 class LSTMModel(nn.Module):
-	def __init__(self, visual_dim, lang_dim, hidden_dim, out_dim=1, mlp_dims=[], bidirectional=False, n_layers=1, dropout=0):
+	def __init__(self, visual_dim, lang_dim, hidden_dim, out_dim=1, mlp_dims=[], bidirectional=False, n_layers=1, dropout=0, img2seq=False):
 		super(LSTMModel, self).__init__()
 		#self.drop = nn.Dropout(dropout)
 
@@ -141,9 +143,13 @@ class LSTMModel(nn.Module):
 		self.hidden_dim = hidden_dim
 		self.n_layers = n_layers
 		self.bidirectional = bidirectional
+		# if using img as the first input of word sequence
+		self.img2seq = img2seq
         
         # self.batch_size = 4 * batch_size # TODO: hard coded
 		# self.hidden = self.init_hidden()
+		if img2seq:
+			self.img2worddim = nn.Linear(visual_dim, lang_dim)
 
 		layers = []
 		dims = [hidden_dim+visual_dim] + mlp_dims + [out_dim]
@@ -164,8 +170,17 @@ class LSTMModel(nn.Module):
 					Variable(torch.zeros(self.n_layers, batch_size, self.hidden_dim)))
 
 	def forward(self, lang_input, img_input, seq_lens):
-		# lang_input: (batch, seq_len, WD), want (seq_len, batch, WD)
-		# lang_input = torch.transpose(lang_input, 0, 1)
+		'''
+		lang_input: tensor - (batch, seq_len, word_dim)
+		img_input: tensor - (batch_size, img_dim)
+		seq_lens: tensor - list of seq lengtsh in decreasing size, for pack_padded_sequence
+		'''
+		if self.img2seq:
+			img_token = self.img2worddim(img_input)
+			img_token = torch.unsqueeze(img_token, 1)
+			lang_input = torch.cat([img_token, lang_input], dim=1)
+			seq_lens += 1
+
 		lang_input_packed = nn.utils.rnn.pack_padded_sequence(lang_input, list(seq_lens), batch_first=True)
 
 		# self.hidden = self.init_hidden(lang_input.size(0))
@@ -303,7 +318,7 @@ if __name__ == '__main__':
 		test_loader = DataLoader(VQADataset(img_feats, test_qa_map), batch_size=batch_size, shuffle=False, collate_fn=pad_collate_fn)
 
 
-	model = LSTMModel(visual_dim=FEAT_DIM, lang_dim=WV_DIM, hidden_dim=WV_DIM, out_dim=1, mlp_dims=[1024, 512, 512], bidirectional=bidir)
+	model = LSTMModel(visual_dim=FEAT_DIM, lang_dim=WV_DIM, hidden_dim=WV_DIM, out_dim=1, mlp_dims=[1024, 512, 512], bidirectional=bidir, img2seq=img2seq)
 	loss_fn = torch.nn.BCEWithLogitsLoss()
 	optim = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=wd)
 	if use_pretrain and pretrained_path:
@@ -333,10 +348,10 @@ if __name__ == '__main__':
 				best_acc = val_acc
 				torch.save({'model': model.state_dict(), 'optim': optim.state_dict()}, checkpoint)
 			print("Time taken: {}m".format((time.time()-t_start_ep)/60))
+			print("File: {}".format(log_file))
 
 	# Evaluate on test set
 	print("\nEvaluating on test set...")
 	eval(model, test_loader, save='bow_test_top1.npy')
 
 	print("\nTotal Time: {}h".format((time.time()-t_start_total)/60/60))
-	print(log_file)
