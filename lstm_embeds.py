@@ -36,6 +36,7 @@ lr = 5e-5
 wd = 5e-4
 bidir = True
 img2seq = False
+finetune_embeds = True
 # Exec related
 LOAD_TRAIN = True
 LOAD_VAL = True
@@ -48,8 +49,10 @@ out_dir = './checkpoints'
 if not os.path.exists(out_dir):
 	os.mkdir(out_dir)
 now = datetime.now()
-file_format = os.path.join(out_dir, '{}{}lr{}_wd{}_bts{:d}_ep{:d}_{}'
-                           .format("bi_" if bidir else "", "img_" if img2seq else "",
+file_format = os.path.join(out_dir, '{}{}{}lr{}_wd{}_bts{:d}_ep{:d}_{}'
+                           .format("bi_" if bidir else "",
+								   "img_" if img2seq else "",
+								   "emb_" if finetune_embeds else "",
 								   lr, wd, batch_size, n_epoch, time.strftime("%m%d%H%M%S")))
 log_file = file_format + '_continue6.json'
 checkpoint = file_format + '_continue6.pt'
@@ -87,6 +90,11 @@ def pad_collate_fn(batch):
 	"""
 	Input: batch: list
 	Output:
+	* seq_lens: IntTensor - sorted seq_lens in decreasing order
+	* indices: LongTensor - indices of sorted seq_lens in decreasing order
+	* qa_embeds_padded: LongTensor - qa embed lookup indices, padded to batch max length with zeros
+	* img_feats[indices]: FloatTensor - img_feats sorted by indices
+	* labels[indices]: FloatTensor - labels sorted by indices
 	"""
 	qa_embeds = []
 	img_feats = []
@@ -120,7 +128,7 @@ def pad_collate_fn(batch):
 	return seq_lens, indices, qa_embeds_padded, img_feats[indices], labels[indices]
 
 class LSTMModel(nn.Module):
-	def __init__(self, visual_dim, lang_dim, hidden_dim, out_dim=1, mlp_dims=[], embed_weights=None, bidirectional=False, n_layers=1, dropout=0, img2seq=False):
+	def __init__(self, visual_dim, lang_dim, hidden_dim, out_dim=1, mlp_dims=[], embed_weights=None, finetune_embeds=False, bidirectional=False, n_layers=1, dropout=0, img2seq=False):
 		super(LSTMModel, self).__init__()
 		#self.drop = nn.Dropout(dropout)
 
@@ -139,7 +147,8 @@ class LSTMModel(nn.Module):
 			# self.embeds = nn.Embedding.from_pretrained(embed_weights)
 			self.embeds.weight.data.copy_(torch.from_numpy(embed_weights))
 			# self.embeds.weight = nn.Parameter(embed_weights)
-
+		if not finetune_embeds:
+			self.embeds.weight.requires_grad = False
 
 		# if using img as the first input of word sequence
 		if img2seq:
@@ -255,7 +264,7 @@ def eval(model, loader, update_stats=False, save=''):
 		seq_lens, indices, qa_embeds, img_feats, gt = batch
 		this_batch_size = int(seq_lens.size(0)/4)
 		# Variable for autograd
-		qa_embeds_var = Variable(qa_embeds).type(dtype)  # Variable(q_embed.mean(1)).type(dtype)
+		qa_embeds_var = Variable(qa_embeds).type(torch.LongTensor)
 		img_feats_var = Variable(img_feats).type(dtype)
 		gt_var = Variable(gt).type(dtype)
 		if USE_GPU:
@@ -317,7 +326,7 @@ if __name__ == '__main__':
 		test_loader = DataLoader(VQADataset(img_feats, test_qa_map), batch_size=batch_size, shuffle=False, collate_fn=pad_collate_fn)
 
 
-	model = LSTMModel(visual_dim=FEAT_DIM, lang_dim=WV_DIM, hidden_dim=WV_DIM, out_dim=1, mlp_dims=[1024, 512, 512], embed_weights=embeds, bidirectional=bidir, img2seq=img2seq)
+	model = LSTMModel(visual_dim=FEAT_DIM, lang_dim=WV_DIM, hidden_dim=WV_DIM, out_dim=1, mlp_dims=[1024, 512, 512], embed_weights=embeds, finetune_embeds=finetune_embeds, bidirectional=bidir, img2seq=img2seq)
 	loss_fn = torch.nn.BCEWithLogitsLoss()
 	optim = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=wd)
 
