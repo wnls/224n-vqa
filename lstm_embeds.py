@@ -334,6 +334,9 @@ if __name__ == '__main__':
 		pretrained = torch.load(pretrained_path)
 		model.load_state_dict(pretrained['model'])
 		optim.load_state_dict(pretrained['optim'])
+		# set model lr to new lr
+		for param_group in optim.param_groups:
+			param_group['lr'] = lr
 	if USE_GPU:
 		print("Use GPU")
 		model = model.cuda()
