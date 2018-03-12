@@ -31,17 +31,17 @@ n_epoch = 300
 print_every_train = 50
 print_every_val = 100
 batch_size = 128
-lr = 5e-7
+lr = 5e-7 #####
 wd = 5e-4
-bidir = True
-img2seq = False
+bidir = False #####
+img2seq = False #####
 # Exec related
 LOAD_TRAIN = True
 LOAD_VAL = True
 LOAD_TEST = True
 PERFORM_TRAIN = True
-use_pretrain = False
-pretrained_path = './checkpoints/bi_lr5e-07_wd0.0005_bts128_ep100_0311201826_continue5.pt'
+use_pretrain = True ###
+pretrained_path = './checkpoints/lr5e-06_wd0.0005_bts128_ep300_0311010557_continue5.pt' #####
 # output files
 out_dir = './checkpoints'
 if not os.path.exists(out_dir):
@@ -50,8 +50,8 @@ now = datetime.now()
 file_format = os.path.join(out_dir, '{}{}lr{}_wd{}_bts{:d}_ep{:d}_{}'
                            .format("bi_" if bidir else "", "img_" if img2seq else "",
 								   lr, wd, batch_size, n_epoch, time.strftime("%m%d%H%M%S")))
-log_file = file_format + '_continue6.json'
-checkpoint = file_format + '_continue6.pt'
+log_file = file_format + '_continue6.json' #####
+checkpoint = file_format + '_continue6.pt' #####
 
 
 class VQADataset(Dataset):
@@ -71,22 +71,12 @@ class VQADataset(Dataset):
 		* a_embeds: list of 4 items, each of size (n_a, 300); the 1st item is GT
 		* img_feats: (2048,) i.e. 1D vector
 		"""
-		# return np.stack([q_embed for i in range(4)]), np.stack([a_embed for a_embed in a_embeds]), np.tile(np.asarray(self.img_features[img_id]), [4,1]), np.asarray([1,0,0,0]).reshape(4,1)
 		qa_encode = []
 		for a_embed in a_embeds:
 			qa_encode.append(np.vstack((q_embed, a_embed)))
-		# qa_encode = np.stack(qa_encode, 0)
-		# l_max = max([a_embed.shape[0] for a_embed in a_embeds])
-		# for a_embed in a_embeds:
-		# 	padded_a_embed = np.concatenate([a_embed, np.zeros([l_max-a_embed.shape[0], 300])], 0)
-		# 	qa_embeds.append(np.vstack((q_embed, padded_a_embed)))
-		# qa_encode = np.stack(qa_embeds, 0)
 		img_encode = np.tile(np.asarray(self.img_features[img_id]), [4,1])
-		# print('qa_encode shape:', qa_encode.shape)
-		# print('img_encode shape:',img_encode.shape)
 		sys.stdout.flush()
 		return qa_encode, img_encode, np.asarray([1,0,0,0]).reshape(4,1)
-		# return np.tile(q_embed.mean(0), [4,1]), np.stack([a_embed.mean(0) for a_embed in a_embeds]), np.tile(np.asarray(self.img_features[img_id]), [4,1]), np.asarray([1,0,0,0]).reshape(4,1)
 
 	def __len__(self):
 		return len(self.qa_map)
@@ -96,8 +86,6 @@ def pad_collate_fn(batch):
 	Input: batch: list
 	Output:
 	"""
-	# max_len = max(batch, key=lambda tp: max(tp[0], key=lambda li: ))
-	# max_len = max([max(tp[0], key=lambda a: a.shape[0]) for tp in batch])
 	qa_embeds = []
 	img_feats = []
 	labels = []
@@ -109,11 +97,8 @@ def pad_collate_fn(batch):
 	img_feats = torch.FloatTensor(np.stack(img_feats))
 	labels = torch.FloatTensor(np.stack(labels))
 
-	#TODO torch.IntTensor?
 	lens = torch.IntTensor([i.shape[0] for i in qa_embeds])
 	seq_lens, indices = lens.sort(descending=True)
-	# indices = np.argsort(lens)[::-1]
-	# seq_lens = lens[indices]
 	max_len = seq_lens[0]
 	qa_embeds_padded = []
 
@@ -186,7 +171,7 @@ class LSTMModel(nn.Module):
 		# self.hidden = self.init_hidden(lang_input.size(0))
 		# hidden size zeros by default
 		out, (h_t, c_t) = self.lstm(lang_input_packed) # h_t: (num_layers * num_directions, batch_size, hidden_size)
-		# h_t = h_t.squeeze(0) # squeeze out n_layers
+		# h_t = h_t.squeeze(0) 
 		h_t = torch.mean(h_t, 0)
 		assert(h_t.size(0) == img_input.size(0)), "size mismatch: h_t: {} / img_input: {}".format(h_t.size(), img_input.size())
 		mlp_input = torch.cat([h_t, img_input], 1)
