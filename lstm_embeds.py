@@ -328,7 +328,8 @@ if __name__ == '__main__':
 
 	model = LSTMModel(visual_dim=FEAT_DIM, lang_dim=WV_DIM, hidden_dim=WV_DIM, out_dim=1, mlp_dims=[1024, 512, 512], embed_weights=embeds, finetune_embeds=finetune_embeds, bidirectional=bidir, img2seq=img2seq)
 	loss_fn = torch.nn.BCEWithLogitsLoss()
-	optim = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=wd)
+    # only pass in parameters that require grad
+	optim = torch.optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=lr, weight_decay=wd)
 
 	if use_pretrain and pretrained_path:
 		pretrained = torch.load(pretrained_path)
