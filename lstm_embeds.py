@@ -155,7 +155,7 @@ class LSTMModel(nn.Module):
 
 		# if using img as the first input of word sequence
 		if img2seq:
-			self.img2worddim = nn.Linear(visual_dim, lang_dim)
+			self.img2worddim = nn.Sequential(nn.Linear(visual_dim, lang_dim), nn.ReLU())
 
 		layers = []
 		dims = [hidden_dim+visual_dim] + mlp_dims + [out_dim]
