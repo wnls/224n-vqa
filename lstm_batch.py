@@ -134,7 +134,7 @@ class LSTMModel(nn.Module):
         # self.batch_size = 4 * batch_size # TODO: hard coded
 		# self.hidden = self.init_hidden()
 		if img2seq:
-			self.img2worddim = nn.Linear(visual_dim, lang_dim)
+			self.img2worddim = nn.Sequential(nn.Linear(visual_dim, lang_dim), nn.ReLU())
 
 		layers = []
 		dims = [hidden_dim+visual_dim] + mlp_dims + [out_dim]
