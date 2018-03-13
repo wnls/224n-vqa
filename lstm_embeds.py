@@ -34,9 +34,11 @@ print_every_val = 100
 batch_size = 128
 lr = 5e-5
 wd = 5e-4
-bidir = True
+bidir = False
 img2seq = False
-finetune_embeds = True
+finetune_embeds = False
+n_layers = 2
+dropout = 0
 # Exec related
 LOAD_TRAIN = True
 LOAD_VAL = True
@@ -49,13 +51,13 @@ out_dir = './checkpoints'
 if not os.path.exists(out_dir):
 	os.mkdir(out_dir)
 now = datetime.now()
-file_format = os.path.join(out_dir, '{}{}{}lr{}_wd{}_bts{:d}_ep{:d}_{}'
+file_format = os.path.join(out_dir, '{}{}{}nl{}_dp{}_lr{}_wd{}_bts{:d}_ep{:d}_{}'
                            .format("bi_" if bidir else "",
 								   "img_" if img2seq else "",
 								   "emb_" if finetune_embeds else "",
-								   lr, wd, batch_size, n_epoch, time.strftime("%m%d%H%M%S")))
-log_file = file_format + '_continue6.json'
-checkpoint = file_format + '_continue6.pt'
+								   n_layers, dropout, lr, wd, batch_size, n_epoch, time.strftime("%m%d%H%M%S")))
+log_file = file_format + '.json'
+checkpoint = file_format + '.pt'
 
 
 class VQADataset(Dataset):
@@ -132,7 +134,7 @@ class LSTMModel(nn.Module):
 		super(LSTMModel, self).__init__()
 		#self.drop = nn.Dropout(dropout)
 
-		self.lstm = nn.LSTM(lang_dim, hidden_dim, n_layers, batch_first=True, bidirectional=bidirectional)
+		self.lstm = nn.LSTM(lang_dim, hidden_dim, n_layers, batch_first=True, bidirectional=bidirectional, dropout=dropout)
 		self.visual_dim = visual_dim
 		self.lang_dim = lang_dim
 		self.hidden_dim = hidden_dim
@@ -326,7 +328,7 @@ if __name__ == '__main__':
 		test_loader = DataLoader(VQADataset(img_feats, test_qa_map), batch_size=batch_size, shuffle=False, collate_fn=pad_collate_fn)
 
 
-	model = LSTMModel(visual_dim=FEAT_DIM, lang_dim=WV_DIM, hidden_dim=WV_DIM, out_dim=1, mlp_dims=[1024, 512, 512], embed_weights=embeds, finetune_embeds=finetune_embeds, bidirectional=bidir, img2seq=img2seq)
+	model = LSTMModel(visual_dim=FEAT_DIM, lang_dim=WV_DIM, hidden_dim=WV_DIM, out_dim=1, mlp_dims=[1024, 512, 512], embed_weights=embeds, finetune_embeds=finetune_embeds, n_layers=n_layers, bidirectional=bidir, img2seq=img2seq, dropout=dropout)
 	loss_fn = torch.nn.BCEWithLogitsLoss()
     # only pass in parameters that require grad
 	optim = torch.optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=lr, weight_decay=wd)
