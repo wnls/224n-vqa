@@ -11,6 +11,7 @@ import sys
 import time
 from datetime import datetime
 # data utils
+import argparse
 import numpy as np
 import h5py
 import pickle
@@ -18,48 +19,44 @@ import json
 # self-defined modules
 import preprocess
 
+parser = argparse.ArgumentParser()
+parser.add_argument('--mode', default='train', type=str)
+# Model
+parser.add_argument('--use_pretrain', default=False, type=bool)
+parser.add_argument('--pretrained_path', default='./checkpoints/bi_lr5e-07_wd0.0005_bts128_ep100_0311201826_continue5.pt', type=str)
+parser.add_argument('--feat_dim', default=2048, type=int)
+parser.add_argument('--wv_dim', default=300, type=int)
+parser.add_argument('--bidir', default=False, type=bool)
+parser.add_argument('--n_layers', default=2, type=int)
+parser.add_argument('--img2seq', default=False, type=bool)
+parser.add_argument('--hidden_dim', default=200, type=bool)
+# Training
+parser.add_argument('--print_every_train', default=50, type=int)
+parser.add_argument('--print_every_val', default=100, type=int)
+# Optimization
+parser.add_argument('--loss', default='BCE', type=str)
+parser.add_argument('--margin', default=0.6, type=float)
+parser.add_argument('--lr', default=5e-5, type=float)
+parser.add_argument('--wd', default=0, type=float)
+parser.add_argument('--batch_size', default=128, type=int)
+parser.add_argument('--dropout', default=0, type=float)
+parser.add_argument('--n_epoch', default=100, type=int)
+parser.add_argument('--finetune_embeds', default=False, type=bool)
+# Files
+parser.add_argument('--outDir', default='./checkpoints', type=str)
+
 t_start_total = time.time()
 
 # system
 USE_GPU = torch.cuda.is_available()
 # data
-FEAT_DIM = 2048
-WV_DIM = 300
 dtype = torch.FloatTensor
 n_vocab = None
-# training
-n_epoch = 100
-print_every_train = 50
-print_every_val = 100
-batch_size = 128
-lr = 5e-5
-wd = 0
-bidir = False
-img2seq = False
-finetune_embeds = False
-n_layers = 2
-dropout = 0
-hidden_dim = 400
+
 # Exec related
 LOAD_TRAIN = True
 LOAD_VAL = True
 LOAD_TEST = True
-PERFORM_TRAIN = True
-use_pretrain = False
-pretrained_path = './checkpoints/bi_lr5e-07_wd0.0005_bts128_ep100_0311201826_continue5.pt'
-# output files
-out_dir = './checkpoints'
-if not os.path.exists(out_dir):
-	os.mkdir(out_dir)
-now = datetime.now()
-file_format = os.path.join(out_dir, '{}{}{}hd{}_nl{}_dp{}_lr{}_wd{}_bts{:d}_ep{:d}_{}'
-                           .format("bi_" if bidir else "",
-								   "img_" if img2seq else "",
-								   "emb_" if finetune_embeds else "",
-								   hidden_dim, n_layers, dropout, lr, wd, batch_size, n_epoch, time.strftime("%m%d%H%M%S")))
-log_file = file_format + '.json'
-checkpoint = file_format + '.pt'
-
 
 class VQADataset(Dataset):
 	def __init__(self, img_features, qa_map):
@@ -131,7 +128,8 @@ def pad_collate_fn(batch):
 	return seq_lens, indices, qa_embeds_padded, img_feats[indices], labels[indices]
 
 class LSTMModel(nn.Module):
-	def __init__(self, visual_dim, lang_dim, hidden_dim=WV_DIM, out_dim=1, mlp_dims=[], embed_weights=None, finetune_embeds=False, bidirectional=False, n_layers=1, dropout=0, img2seq=False):
+	def __init__(self, visual_dim, lang_dim, hidden_dim, out_dim=1, mlp_dims=[], embed_weights=None, finetune_embeds=False,
+		bidirectional=False, n_layers=1, dropout=0, img2seq=False):
 		super(LSTMModel, self).__init__()
 		#self.drop = nn.Dropout(dropout)
 
@@ -144,7 +142,7 @@ class LSTMModel(nn.Module):
 		self.bidirectional = bidirectional
 		self.img2seq = img2seq
 
-		self.embeds = nn.Embedding(n_vocab, WV_DIM)
+		self.embeds = nn.Embedding(n_vocab, self.lang_dim)
 		if embed_weights is not None:
 			# embed_weights = torch.FloatTensor(embed_weights)
 			# self.embeds = nn.Embedding.from_pretrained(embed_weights)
@@ -296,6 +294,21 @@ def eval(model, loader, update_stats=False, save=''):
 
 
 if __name__ == '__main__':
+	args = parser.parse_args()
+
+	# output files
+	if not os.path.exists(args.outDir):
+		os.mkdir(args.outDir)
+	now = datetime.now()
+	file_format = os.path.join(args.outDir, '{}{}{}{}hd{}_nl{}_dp{}_lr{}_wd{}_bts{:d}_ep{:d}_{}'
+	                           .format("bi_" if args.bidir else "",
+									   "img_" if args.img2seq else "",
+									   "emb_" if args.finetune_embeds else "",
+									   "{:s}_".format(args.loss),
+									   args.hidden_dim, args.n_layers, args.dropout, args.lr, args.wd, args.batch_size, args.n_epoch, time.strftime("%m%d%H%M%S")))
+	log_file = file_format + '.json'
+	checkpoint = file_format + '.pt'
+
 	# input files
 	json_filename_format = './data/visual7w-telling_{:s}.json'
 	img_feats_fname = './data/resnet101_avgpool.h5'
@@ -315,32 +328,38 @@ if __name__ == '__main__':
 	if LOAD_TRAIN:
 		# train
 		train_qa_map = pickle.load(open(saved_qa_map_format.format('train'), 'rb')) if os.path.exists(saved_qa_map_format.format('train')) \
-			else preprocess.process_qas_embeds(json_filename_format.format('train'), vocab_p_filename, save=saved_qa_map_format.format('train'))
-		train_loader = DataLoader(VQADataset(img_feats, train_qa_map), batch_size=batch_size, shuffle=True, collate_fn=pad_collate_fn)
+			else preprocess.process_qas_embeds(json_filename_format.format('train'), vocab_p_filename, save_file=saved_qa_map_format.format('train'))
+		train_loader = DataLoader(VQADataset(img_feats, train_qa_map), batch_size=args.batch_size, shuffle=True, collate_fn=pad_collate_fn)
 	if LOAD_VAL:
 		# val
 		val_qa_map = pickle.load(open(saved_qa_map_format.format('val'), 'rb')) if os.path.exists(saved_qa_map_format.format('val')) \
-			else preprocess.process_qas_embeds(json_filename_format.format('val'), vocab_p_filename, save=saved_qa_map_format.format('val'))
-		val_loader = DataLoader(VQADataset(img_feats, val_qa_map), batch_size=batch_size, shuffle=False, collate_fn=pad_collate_fn)
+			else preprocess.process_qas_embeds(json_filename_format.format('val'), vocab_p_filename, save_file=saved_qa_map_format.format('val'))
+		val_loader = DataLoader(VQADataset(img_feats, val_qa_map), batch_size=args.batch_size, shuffle=False, collate_fn=pad_collate_fn)
 	if LOAD_TEST:
 		# test
 		test_qa_map = pickle.load(open(saved_qa_map_format.format('test'), 'rb')) if os.path.exists(saved_qa_map_format.format('test')) \
-			else preprocess.process_qas_embeds(json_filename_format.format('test'), vocab_p_filename, save=saved_qa_map_format.format('test'))
-		test_loader = DataLoader(VQADataset(img_feats, test_qa_map), batch_size=batch_size, shuffle=False, collate_fn=pad_collate_fn)
+			else preprocess.process_qas_embeds(json_filename_format.format('test'), vocab_p_filename, save_file=saved_qa_map_format.format('test'))
+		test_loader = DataLoader(VQADataset(img_feats, test_qa_map), batch_size=args.batch_size, shuffle=False, collate_fn=pad_collate_fn)
 
 
-	model = LSTMModel(visual_dim=FEAT_DIM, lang_dim=WV_DIM, hidden_dim=hidden_dim, out_dim=1, mlp_dims=[1024, 512, 512], embed_weights=embeds, finetune_embeds=finetune_embeds, n_layers=n_layers, bidirectional=bidir, img2seq=img2seq, dropout=dropout)
-	loss_fn = torch.nn.BCEWithLogitsLoss()
+	model = LSTMModel(visual_dim=args.feat_dim, lang_dim=args.wv_dim, hidden_dim=args.hidden_dim, out_dim=1, mlp_dims=[1024, 512, 512],
+		embed_weights=embeds, finetune_embeds=args.finetune_embeds, n_layers=args.n_layers, bidirectional=args.bidir, img2seq=args.img2seq, dropout=args.dropout)
+	if args.loss == 'BCE':
+		loss_fn = torch.nn.BCEWithLogitsLoss()
+	elif args.loss == 'rank':
+		loss_fn = torch.nn.MarginRankingLoss(margin=args.margin)
     # only pass in parameters that require grad
-	optim = torch.optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=lr, weight_decay=wd)
+	optim = torch.optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=args.lr, weight_decay=args.wd)
 
-	if use_pretrain and pretrained_path:
-		pretrained = torch.load(pretrained_path)
-		model.load_state_dict(pretrained['model'])
-		optim.load_state_dict(pretrained['optim'])
+	if args.use_pretrain and args.pretrained_path:
+		pretrained = torch.load(args.pretrained_path)
+		model.load_state_dict(args.pretrained['model'])
+		optim.load_state_dict(args.pretrained['optim'])
 		# set model lr to new lr
 		for param_group in optim.param_groups:
+			before = param_group['lr']
 			param_group['lr'] = lr
+			print('optim lr: before={} / after={}'.format(before, lr))
 	if USE_GPU:
 		print("Use GPU")
 		model = model.cuda()
@@ -348,10 +367,10 @@ if __name__ == '__main__':
 	else:
 		print("Use CPU")
 
-	if PERFORM_TRAIN:
+	if args.mode == 'train':
 		best_acc = 0
 		stats = {'train_loss':[], 'train_acc':[], 'val_acc':[]}
-		for e in range(n_epoch):
+		for e in range(args.n_epoch):
 			t_start_ep = time.time()
 			print("\n\n==== Epoch {:d} ====".format(e+1))
 			train(model, optim, train_loader)
