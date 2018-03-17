@@ -22,14 +22,14 @@ import preprocess
 parser = argparse.ArgumentParser()
 parser.add_argument('--mode', default='train', type=str)
 # Model
-parser.add_argument('--use_pretrain', default=False, type=bool)
+parser.add_argument('--use_pretrain', default=0, type=int)
 parser.add_argument('--pretrained_path', default='./checkpoints/bi_lr5e-07_wd0.0005_bts128_ep100_0311201826_continue5.pt', type=str)
 parser.add_argument('--feat_dim', default=2048, type=int)
 parser.add_argument('--wv_dim', default=300, type=int)
 parser.add_argument('--bidir', default=False, type=bool)
 parser.add_argument('--n_layers', default=2, type=int)
 parser.add_argument('--img2seq', default=False, type=bool)
-parser.add_argument('--hidden_dim', default=200, type=bool)
+parser.add_argument('--hidden_dim', default=200, type=int)
 # Training
 parser.add_argument('--print_every_train', default=50, type=int)
 parser.add_argument('--print_every_val', default=100, type=int)
@@ -37,10 +37,10 @@ parser.add_argument('--print_every_val', default=100, type=int)
 parser.add_argument('--loss', default='BCE', type=str)
 parser.add_argument('--margin', default=0.6, type=float)
 parser.add_argument('--lr', default=5e-5, type=float)
-parser.add_argument('--wd', default=0, type=float)
+parser.add_argument('--wd', default=5e-7, type=float)
 parser.add_argument('--batch_size', default=128, type=int)
 parser.add_argument('--dropout', default=0, type=float)
-parser.add_argument('--n_epoch', default=100, type=int)
+parser.add_argument('--n_epoch', default=200, type=int)
 parser.add_argument('--finetune_embeds', default=False, type=bool)
 # Files
 parser.add_argument('--outDir', default='./checkpoints', type=str)
@@ -162,6 +162,8 @@ class LSTMModel(nn.Module):
 			if i != len(dims)-2:
 				# i.e. no ReLU at the last layer
 				layers += nn.ReLU(),
+			if args.dropout>0:
+				layers += nn.Dropout(args.dropout),
 		self.mlp = nn.Sequential(*layers)
 
 	def init_hidden(self, batch_size):
@@ -199,18 +201,18 @@ class LSTMModel(nn.Module):
 		return out
 
 
-def train(model, optim, loader):
+def train(args, model, optim, loader):
 	model.train()
 
 	top1_cnt = 0
 	total_cnt = 0
 	t_start = time.time()
 	for i,batch in enumerate(loader):
-		if i and i%print_every_train==0:
-			avg_loss = sum(stats['train_loss'][-print_every_train:])/print_every_train
-			avg_time = (time.time()-t_start)/print_every_train
+		if i and i%args.print_every_train==0:
+			avg_loss = sum(stats['train_loss'][-args.print_every_train:])/args.print_every_train
+			avg_time = (time.time()-t_start)/args.print_every_train
 			cur_acc = top1_cnt/total_cnt if total_cnt else -1
-			print('{:d}-{:d}: avg_loss={:f} / avg_time={:f}s / cur_acc={:f}'.format(i-print_every_train, i, avg_loss, avg_time, cur_acc))
+			print('{:d}-{:d}: avg_loss={:f} / avg_time={:f}s / cur_acc={:f}'.format(i-args.print_every_train, i, avg_loss, avg_time, cur_acc))
 			sys.stdout.flush()
 			t_start = time.time()
 
@@ -228,7 +230,20 @@ def train(model, optim, loader):
 
 		# forward
 		out = model(qa_embeds_var, img_feats_var, seq_lens)
-		loss = loss_fn(out, gt_var)
+		if args.loss == 'BCE':
+			loss = loss_fn(out, gt_var)
+		elif args.loss == 'rank':
+			# pos_col = out[indices[0::4]].expand(this_batch_size, 3).view(-1)
+			_, unsort_ind = indices.sort()
+			out_orig_order = out[unsort_ind].view(-1, 4)
+			pos_col = out_orig_order[:,0]
+			neg_col = out_orig_order[:,1:].mean(dim=1)
+			flag_col = torch.ones_like(pos_col)
+			if USE_GPU:
+				pos_col = pos_col.cuda()
+				neg_col = neg_col.cuda()
+				flag_col = flag_col.cuda()
+			loss = loss_fn(pos_col, neg_col, flag_col)
 		# unsort out
 		_, unsort_ind = indices.sort(0)
 		out = out[unsort_ind]
@@ -246,7 +261,7 @@ def train(model, optim, loader):
 	print("train top@1 accuracy:", acc)
 
 
-def eval(model, loader, update_stats=False, save=''):
+def eval(args, model, loader, update_stats=False, save=''):
 	model.eval()
 
 	top1_cnt = 0
@@ -254,10 +269,10 @@ def eval(model, loader, update_stats=False, save=''):
 	top1_result = []
 	t_start = time.time()
 	for i,batch in enumerate(loader):
-		if i and i%print_every_val==0:
-			avg_time = (time.time()-t_start)/print_every_val
+		if i and i%args.print_every_val==0:
+			avg_time = (time.time()-t_start)/args.print_every_val
 			cur_acc = top1_cnt/total_cnt if total_cnt else -1
-			print('{:d}-{:d}: avg_time={:f}s / cur_acc={:f}'.format(i-print_every_val, i, avg_time, cur_acc))
+			print('{:d}-{:d}: avg_time={:f}s / cur_acc={:f}'.format(i-args.print_every_val, i, avg_time, cur_acc))
 			sys.stdout.flush()
 			t_start = time.time()
 
@@ -342,8 +357,7 @@ if __name__ == '__main__':
 		test_loader = DataLoader(VQADataset(img_feats, test_qa_map), batch_size=args.batch_size, shuffle=False, collate_fn=pad_collate_fn)
 
 
-	model = LSTMModel(visual_dim=args.feat_dim, lang_dim=args.wv_dim, hidden_dim=args.hidden_dim, out_dim=1, mlp_dims=[1024, 512, 512],
-		embed_weights=embeds, finetune_embeds=args.finetune_embeds, n_layers=args.n_layers, bidirectional=args.bidir, img2seq=args.img2seq, dropout=args.dropout)
+	model = LSTMModel(visual_dim=args.feat_dim, lang_dim=args.wv_dim, hidden_dim=args.hidden_dim, out_dim=1, mlp_dims=[1024, 512, 512], embed_weights=embeds, finetune_embeds=args.finetune_embeds, n_layers=args.n_layers, bidirectional=args.bidir, img2seq=args.img2seq, dropout=args.dropout)
 	if args.loss == 'BCE':
 		loss_fn = torch.nn.BCEWithLogitsLoss()
 	elif args.loss == 'rank':
@@ -352,14 +366,15 @@ if __name__ == '__main__':
 	optim = torch.optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=args.lr, weight_decay=args.wd)
 
 	if args.use_pretrain and args.pretrained_path:
+		print('Using pretrained model', args.pretrained_path)
 		pretrained = torch.load(args.pretrained_path)
-		model.load_state_dict(args.pretrained['model'])
-		optim.load_state_dict(args.pretrained['optim'])
+		model.load_state_dict(pretrained['model'])
+		optim.load_state_dict(pretrained['optim'])
 		# set model lr to new lr
 		for param_group in optim.param_groups:
 			before = param_group['lr']
-			param_group['lr'] = lr
-			print('optim lr: before={} / after={}'.format(before, lr))
+			param_group['lr'] = args.lr
+			print('optim lr: before={} / after={}'.format(before, args.lr))
 	if USE_GPU:
 		print("Use GPU")
 		model = model.cuda()
@@ -373,8 +388,8 @@ if __name__ == '__main__':
 		for e in range(args.n_epoch):
 			t_start_ep = time.time()
 			print("\n\n==== Epoch {:d} ====".format(e+1))
-			train(model, optim, train_loader)
-			val_acc = eval(model, val_loader, update_stats=True)
+			train(args, model, optim, train_loader)
+			val_acc = eval(args, model, val_loader, update_stats=True)
 	
 			with open(log_file, "w") as handle:
 				json.dump(stats, handle)
@@ -387,6 +402,6 @@ if __name__ == '__main__':
 
 	# Evaluate on test set
 	print("\nEvaluating on test set...")
-	eval(model, test_loader, save='bow_test_top1.npy')
+	eval(args, model, test_loader, save='bow_test_top1.npy')
 
 	print("\nTotal Time: {}h".format((time.time()-t_start_total)/60/60))
