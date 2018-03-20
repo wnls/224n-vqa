@@ -29,7 +29,7 @@ import json
 
 
 def extract_features(split):
-  img_dir_base = './'
+  img_dir_base = '/home/grapefruit/vqa/dataset/images/'
 
   transform = transforms.Compose([
                 transforms.Resize([224, 224]),
@@ -43,24 +43,31 @@ def extract_features(split):
   model = model.cuda()
   model.eval()
 
-  def get_feature_hook(self, input, output):
-    if output.data.size(0) == 1:
-      out = output.data.cpu().numpy().reshape(output.data.size(1))
+  def get_feature_hook(self, input, output, flatten=False):
+    # print('get_feature_hook: out size:', out.shape)
+    if flatten:
+      if output.data.size(0) == 1:
+        out = output.data.cpu().numpy().reshape(output.data.size(1))
+      else:
+        out = output.data.cpu().numpy().reshape(output.data.size(0), output.data.size(1))
     else:
-      out = output.data.cpu().numpy().reshape(output.data.size(0), output.data.size(1))
+      if output.data.size(0) == 1:
+        out = output.squeeze(0).data.cpu().numpy()
+      else:
+        out = output.data.cpu().numpy()
     feats.append(out)
 
-  feat_layer = model._modules.get('avgpool')
+  feat_layer = model._modules.get('layer4')
   feat_layer.register_forward_hook(get_feature_hook)
-  feat_file = '/home/grapefruit/vqa/resnet101_avgpool.h5'.format(split)
-  featsh5 = h5py.File(feat_file, 'w')
+  feat_file = '/home/grapefruit/vqa/resnet101_layer4.h5'.format(split)
+  featsh5 = h5py.File(feat_file, 'w') # TODO: uncomment this
 
   print_every = 500
   cache_every = 2000
   start = time.time()
-  img_paths = sorted(glob('v7w_*.jpg'))
+  img_paths = sorted(glob(os.path.join(img_dir_base, 'v7w_*.jpg')))
   all_feats = []
-  for i, img in enumerate(img_paths):
+  for i, path in enumerate(img_paths):
     if i and i%print_every==0:
       avg_time = (time.time() - start)/print_every
       print('Processing {:d}/{:d} (avg: {:f}s)'.format(i, len(img_paths), avg_time))
@@ -71,20 +78,24 @@ def extract_features(split):
     img = Image.open(open(path, 'rb'))
     img = transform(img)
     img_var = Variable(torch.unsqueeze(img, 0)).cuda()
-    out = model.forward(img_var.un)
+    if img_var.size(1) == 1:
+      # Gray scale img --> convert to RGB
+      img_var = img_var.expand(1, 3, img_var.size(2), img_var.size(3))
+    out = model.forward(img_var)
     all_feats += feats[0],
 
     if i and i%cache_every==0:
-      with open('/home/grapefruit/vqa/all_feats_tmp.pickle', 'wb') as handle:
+      with open(feat_file.replace('.h5', '_tmp{:d}.pickle'.format(i)), 'wb') as handle:
         pickle.dump(all_feats, handle)
+        all_feats = []
     # feats = np.concatenate(feats, axis=0)
     # print('type feats:', type(feats))
     # print('feats size:', feats.shape)
     # feats_arr = np.asarray(feats).squeeze()
     # print('feats_arr type:', type(feats_arr))
-    featsh5.create_dataset(img[img.find('_')+1:img.find('.')], data=feats[0])
+    featsh5.create_dataset(path[path.find('v7w_')+4:path.find('.jpg')], data=feats[0])
   featsh5.close()
 
 
 if __name__ == '__main__':
-  extract_features()
+  extract_features('val')
