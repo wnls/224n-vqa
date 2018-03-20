@@ -23,7 +23,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--mode', default='train', type=str)
 # Model
 parser.add_argument('--use_pretrain', default=0, type=int)
-parser.add_argument('--pretrained_path', default='./checkpoints/bi_lr5e-07_wd0.0005_bts128_ep100_0311201826_continue5.pt', type=str)
+parser.add_argument('--pretrained_path', default='./checkpoints/spatialAtt_nLv2BCE_hd200_nl1_dp0_lr5e-06_wd5e-06_bts64_ep200_0320182729.pt', type=str)
 parser.add_argument('--feat_dim', default=2048, type=int)
 parser.add_argument('--wv_dim', default=300, type=int)
 parser.add_argument('--bidir', default=False, type=bool)
@@ -61,8 +61,8 @@ dtype = torch.FloatTensor
 n_vocab = None
 
 # Exec related
-LOAD_TRAIN = True
-LOAD_VAL = True
+LOAD_TRAIN = False
+LOAD_VAL = False
 LOAD_TEST = True
 
 class VQADataset(Dataset):
@@ -133,11 +133,11 @@ def pad_collate_fn(batch):
     img_feats = img_feats.cuda()
     labels = labels.cuda()
 
-  print('pad collate fn:')
-  print('indices size:', indices.size())
-  print('qa_embeds_padded size:', qa_embeds_padded.size())
-  print('img_feats size:', img_feats.size())
-  print('labels size:', labels.size())
+  # print('pad collate fn:')
+  # print('indices size:', indices.size())
+  # print('qa_embeds_padded size:', qa_embeds_padded.size())
+  # print('img_feats size:', img_feats.size())
+  # print('labels size:', labels.size())
   return seq_lens, indices, qa_embeds_padded, img_feats[indices], labels[indices]
 
 class LSTMAttentionModel(nn.Module):
@@ -161,7 +161,7 @@ class LSTMAttentionModel(nn.Module):
     self.lang_embed = nn.Linear(lstm_hidden_dim, visual_dim)
     # Q: do we need the activation layer?
     self.tanh = nn.Tanh()
-    self.softmax = nn.Softmax()
+    self.softmax = nn.Softmax(1)
 
     for l in range(n_levels):
       # mapping layer for language
@@ -229,29 +229,35 @@ class LSTMAttentionModel(nn.Module):
     # self.hidden = self.init_hidden(lang_input.size(0))
     # hidden size zeros by default
     out, (h_t, c_t) = self.lstm(lang_input_packed) # h_t: (num_layers * num_directions, batch_size, hidden_size)
-    print('h_t size:', h_t.size())
+    # print('h_t size:', h_t.size())
     h_t = torch.mean(h_t, 0)
     assert(h_t.size(0) == img_input.size(0)), "size mismatch: h_t: {} / img_input: {}".format(h_t.size(), img_input.size())
     # map hidden_lang to visual embedding space
     v_q = self.lang_embed(h_t)
-    print('v_q size:', v_q.size())
-    print('img_input size:', img_input.size())
+    # print('v_q size:', v_q.size())
+    # print('img_input size:', img_input.size())
     u_curr = v_q
+    p_i = None
+    att_lvs = []
     for l in range(self.n_levels):
       v_embed = self.function_modules['wi{:d}'.format(l)](img_input)
       l_embed = self.function_modules['wq{:d}'.format(l)](u_curr)
       if v_embed.dim() != l_embed.dim():
         l_embed = l_embed.unsqueeze(1)
-      print('v_embed size:', v_embed.size())
-      print('l_embed size:', l_embed.size())
+      # print('v_embed size:', v_embed.size())
+      # print('l_embed size:', l_embed.size())
       h_a = self.tanh(l_embed.expand_as(v_embed) + v_embed)
-      print('h_a size:', h_a.size())
+      # print('h_a size:', h_a.size())
       p_i = self.softmax(self.function_modules['wp{:d}'.format(l)](h_a))
-      print('p_i size:', p_i.size())
-      v_i = (p_i.unsqueeze(1) * img_input).sum(-1)
-      u_curr += v_i
+      # print('p_i size:', p_i.size())
+      tmp = p_i * img_input
+      # print('tmp size:', tmp.size())
+      v_i = tmp.sum(1)
+      # print('v_i size:', v_i.size())
+      u_curr = u_curr + v_i # NOTE: do NOT use 'u_curr += v_i', since this is an in-place operation and will cause trouble for gradient calculation.
+      att_lvs.append(p_i)
     out = self.mlp(u_curr)
-    return out
+    return out, att_lvs
 
 
 def train(args, model, optim, loader):
@@ -282,7 +288,7 @@ def train(args, model, optim, loader):
       gt_var = gt_var.cuda()
 
     # forward
-    out = model(qa_embeds_var, img_feats_var, seq_lens)
+    out, _ = model(qa_embeds_var, img_feats_var, seq_lens)
     if args.loss == 'BCE':
       loss = loss_fn(out, gt_var)
     elif args.loss == 'rank':
@@ -314,13 +320,14 @@ def train(args, model, optim, loader):
   print("train top@1 accuracy:", acc)
 
 
-def eval(args, model, loader, update_stats=False, save=''):
+def eval(args, model, loader, update_stats=False, save='', save_att=''):
   model.eval()
 
   top1_cnt = 0
   total_cnt = 0
   top1_result = []
   t_start = time.time()
+  attentions = [[] for l in range(args.n_levels)]
   for i,batch in enumerate(loader):
     if i and i%args.print_every_val==0:
       avg_time = (time.time()-t_start)/args.print_every_val
@@ -342,7 +349,10 @@ def eval(args, model, loader, update_stats=False, save=''):
       gt_var = gt_var.cuda()
 
     # forward
-    out = model(qa_embeds_var, img_feats_var, seq_lens)
+    out, att_lvs = model(qa_embeds_var, img_feats_var, seq_lens)
+    if save_att:
+      for l,att in enumerate(att_lvs):
+        attentions[l] += att.data.cpu().numpy(),
     # unsort out
     _, unsort_ind = indices.sort(0)
     out = out[unsort_ind]
@@ -358,7 +368,11 @@ def eval(args, model, loader, update_stats=False, save=''):
   if save:
     with open(save, 'wb') as fout:
       np.save(fout, np.concatenate(top1_result))
-  return acc
+  if save_att:
+    for l in range(args.n_levels):
+      with open(save_att.replace('.npy', '_lv{:d}.npy'.format(l+1)), 'wb') as fout:
+        np.save(fout, np.concatenate(attentions[l]))
+  return acc, [np.concatenate(att_lst, 0) for att_lst in attentions]
 
 
 if __name__ == '__main__':
@@ -368,8 +382,9 @@ if __name__ == '__main__':
   if not os.path.exists(args.outDir):
     os.mkdir(args.outDir)
   now = datetime.now()
-  file_format = os.path.join(args.outDir, '{}{}{}{}hd{}_nl{}_dp{}_lr{}_wd{}_bts{:d}_ep{:d}_{}'
-                             .format("bi_" if args.bidir else "",
+  file_format = os.path.join(args.outDir, 'spatialAtt_nLv{:d}{}{}{}{}hd{}_nl{}_dp{}_lr{}_wd{}_bts{:d}_ep{:d}_{}'
+                .format(args.n_levels,
+                     "bi_" if args.bidir else "",
                      "img_" if args.img2seq else "",
                      "emb_" if args.finetune_embeds else "",
                      "{:s}_".format(args.loss),
@@ -449,6 +464,6 @@ if __name__ == '__main__':
 
   # Evaluate on test set
   print("\nEvaluating on test set...")
-  eval(args, model, test_loader, save='bow_test_top1.npy')
+  _, att = eval(args, model, test_loader, save='bow_test_top1.npy', save_att='att_49.npy')
 
   print("\nTotal Time: {}h".format((time.time()-t_start_total)/60/60))
