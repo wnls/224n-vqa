@@ -1,9 +1,23 @@
+import matplotlib
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
+import os
+from glob import glob
 import json
 import numpy as np
+import argparse
 
-path = './checkpoints/'
-files = ['bi_lr2e-06_wd0.0005_bts128_m3d10h9m47s31_continue.json','bi_lr5e-06_wd0.0005_bts128_ep300_0310202638_continue2.json']
+parser = argparse.ArgumentParser()
+parser.add_argument('--mode', default='best', type=str, help="'best' for outputing best results from all matching files; 'plot' for plotting curve for selected files.")
+parser.add_argument('--dir', default='checkpoints/')
+parser.add_argument('--format', default='*.json', type=str)
+parser.add_argument('--attribute', default='val_acc', type=str)
+
+args = parser.parse_args()
+
+# files = ['bi_lr2e-06_wd0.0005_bts128_m3d10h9m47s31_continue.json','bi_lr5e-06_wd0.0005_bts128_ep300_0310202638_continue2.json']
+
+files = glob(os.path.join(args.dir, args.format))
 
 train_loss = []
 train_acc = []
