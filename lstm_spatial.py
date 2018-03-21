@@ -200,8 +200,7 @@ class LSTMAttentionModel(nn.Module):
       if i != len(dims)-2:
         # i.e. no ReLU at the last layer
         layers += nn.ReLU(),
-      if args.dropout>0:
-        layers += nn.Dropout(args.dropout),
+      layers += nn.Dropout(args.dropout),
     self.mlp = nn.Sequential(*layers)
 
   def init_hidden(self, batch_size):
