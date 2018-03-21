@@ -23,13 +23,13 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--mode', default='train', type=str)
 # Model
 parser.add_argument('--use_pretrain', default=0, type=int)
-parser.add_argument('--pretrained_path', default='./checkpoints/bi_lr5e-07_wd0.0005_bts128_ep100_0311201826_continue5.pt', type=str)
+parser.add_argument('--pretrained_path', default='', type=str)
 parser.add_argument('--feat_dim', default=2048, type=int)
 parser.add_argument('--wv_dim', default=300, type=int)
 parser.add_argument('--bidir', default=False, type=bool)
-parser.add_argument('--n_layers', default=2, type=int)
+parser.add_argument('--n_layers', default=1, type=int)
 parser.add_argument('--img2seq', default=False, type=bool)
-parser.add_argument('--hidden_dim', default=200, type=int)
+parser.add_argument('--hidden_dim', default=400, type=int)
 # Training
 parser.add_argument('--print_every_train', default=50, type=int)
 parser.add_argument('--print_every_val', default=100, type=int)
@@ -37,14 +37,14 @@ parser.add_argument('--print_every_val', default=100, type=int)
 parser.add_argument('--loss', default='BCE', type=str)
 parser.add_argument('--margin', default=0.6, type=float)
 parser.add_argument('--lr', default=5e-5, type=float)
-parser.add_argument('--wd', default=5e-7, type=float)
+parser.add_argument('--wd', default=0, type=float)
 parser.add_argument('--batch_size', default=128, type=int)
 parser.add_argument('--dropout', default=0, type=float)
 parser.add_argument('--n_epoch', default=200, type=int)
 parser.add_argument('--finetune_embeds', default=False, type=bool)
 # Files
 parser.add_argument('--outDir', default='./checkpoints', type=str)
-
+parser.add_argument('--result_fname', default='', type=str)
 t_start_total = time.time()
 
 # system
@@ -305,6 +305,7 @@ def eval(args, model, loader, update_stats=False, save=''):
 	if save:
 		with open(save, 'wb') as fout:
 			np.save(fout, np.concatenate(top1_result))
+
 	return acc
 
 
@@ -402,6 +403,6 @@ if __name__ == '__main__':
 
 	# Evaluate on test set
 	print("\nEvaluating on test set...")
-	eval(args, model, test_loader, save='bow_test_top1.npy')
+	eval(args, model, test_loader, save=args.result_fname)
 
 	print("\nTotal Time: {}h".format((time.time()-t_start_total)/60/60))
