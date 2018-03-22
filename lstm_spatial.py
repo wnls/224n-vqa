@@ -23,18 +23,20 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--mode', default='train', type=str)
 # Model
 parser.add_argument('--use_pretrain', default=0, type=int)
-parser.add_argument('--pretrained_path', default='./checkpoints/spatialAtt_nLv2BCE_hd200_nl1_dp0_lr5e-06_wd5e-06_bts64_ep200_0320182729.pt', type=str)
+# parser.add_argument('--pretrained_path', default='./checkpoints/spatialAtt_nLv2BCE_hd200_nl1_dp0_lr5e-06_wd5e-06_bts64_ep200_0320182729.pt', type=str)
+parser.add_argument('--pretrained_path', default='./checkpoints/spatialAtt_nLv2BCE_hd200_nl1_dp0.3_lr5e-05_wd5e-06_bts128_ep200_0321073046.pt', type=str)
+# parser.add_argument('--pretrained_path', default='./checkpoints/spatialAtt_nLv1BCE_hd200_nl1_dp0_lr5e-06_wd5e-05_bts32_ep200_0320182917.pt', type=str)
 parser.add_argument('--feat_dim', default=2048, type=int)
 parser.add_argument('--wv_dim', default=300, type=int)
 parser.add_argument('--bidir', default=False, type=bool)
-parser.add_argument('--n_layers', default=2, type=int)
+parser.add_argument('--n_layers', default=1, type=int)
 parser.add_argument('--img2seq', default=False, type=bool)
 parser.add_argument('--lstm_hidden_dim', default=200, type=int)
 parser.add_argument('--att_hidden_dim', default=200, type=int)
-parser.add_argument('--n_levels', default=1, type=int)
+parser.add_argument('--n_levels', default=2, type=int)
 # Training
-parser.add_argument('--print_every_train', default=50, type=int)
-parser.add_argument('--print_every_val', default=100, type=int)
+parser.add_argument('--print_every_train', default=100, type=int)
+parser.add_argument('--print_every_val', default=200, type=int)
 # Optimization
 parser.add_argument('--loss', default='BCE', type=str)
 parser.add_argument('--margin', default=0.6, type=float)
@@ -46,6 +48,8 @@ parser.add_argument('--n_epoch', default=200, type=int)
 parser.add_argument('--finetune_embeds', default=False, type=bool)
 # Files
 parser.add_argument('--outDir', default='./checkpoints', type=str)
+parser.add_argument('--result_fname', default='', type=str)
+parser.add_argument('--att_fname', default='', type=str)
 parser.add_argument('--json_filename_format', default='./data/visual7w-telling_{:s}.json', type=str)
 parser.add_argument('--img_feats_fname', default='./data/resnet101_layer4_flatten.h5', type=str)
 parser.add_argument('--vocab_p_filename', default='./data/vqa_glove_vocab2ind.pkl', type=str)
@@ -61,8 +65,8 @@ dtype = torch.FloatTensor
 n_vocab = None
 
 # Exec related
-LOAD_TRAIN = False
-LOAD_VAL = False
+LOAD_TRAIN = True
+LOAD_VAL = True
 LOAD_TEST = True
 
 class VQADataset(Dataset):
@@ -198,8 +202,7 @@ class LSTMAttentionModel(nn.Module):
       if i != len(dims)-2:
         # i.e. no ReLU at the last layer
         layers += nn.ReLU(),
-      if args.dropout>0:
-        layers += nn.Dropout(args.dropout),
+      layers += nn.Dropout(args.dropout),
     self.mlp = nn.Sequential(*layers)
 
   def init_hidden(self, batch_size):
@@ -244,16 +247,10 @@ class LSTMAttentionModel(nn.Module):
       l_embed = self.function_modules['wq{:d}'.format(l)](u_curr)
       if v_embed.dim() != l_embed.dim():
         l_embed = l_embed.unsqueeze(1)
-      # print('v_embed size:', v_embed.size())
-      # print('l_embed size:', l_embed.size())
       h_a = self.tanh(l_embed.expand_as(v_embed) + v_embed)
-      # print('h_a size:', h_a.size())
       p_i = self.softmax(self.function_modules['wp{:d}'.format(l)](h_a))
-      # print('p_i size:', p_i.size())
       tmp = p_i * img_input
-      # print('tmp size:', tmp.size())
       v_i = tmp.sum(1)
-      # print('v_i size:', v_i.size())
       u_curr = u_curr + v_i # NOTE: do NOT use 'u_curr += v_i', since this is an in-place operation and will cause trouble for gradient calculation.
       att_lvs.append(p_i)
     out = self.mlp(u_curr)
@@ -350,9 +347,8 @@ def eval(args, model, loader, update_stats=False, save='', save_att=''):
 
     # forward
     out, att_lvs = model(qa_embeds_var, img_feats_var, seq_lens)
-    if save_att:
-      for l,att in enumerate(att_lvs):
-        attentions[l] += att.data.cpu().numpy(),
+    for l,att in enumerate(att_lvs):
+      attentions[l] += att.data.cpu().numpy(),
     # unsort out
     _, unsort_ind = indices.sort(0)
     out = out[unsort_ind]
@@ -419,7 +415,8 @@ if __name__ == '__main__':
     test_loader = DataLoader(VQADataset(img_feats, test_qa_map), batch_size=args.batch_size, shuffle=False, collate_fn=pad_collate_fn)
 
 
-  model = LSTMAttentionModel(visual_dim=args.feat_dim, lang_dim=args.wv_dim, lstm_hidden_dim=args.lstm_hidden_dim, att_hidden_dim=args.att_hidden_dim, out_dim=1, mlp_dims=[1024, 512, 512], embed_weights=embeds, finetune_embeds=args.finetune_embeds, n_layers=args.n_layers, bidirectional=args.bidir, img2seq=args.img2seq, dropout=args.dropout, n_levels=args.n_levels)
+  # mlp_dims: was [1024, 512[, 512]]
+  model = LSTMAttentionModel(visual_dim=args.feat_dim, lang_dim=args.wv_dim, lstm_hidden_dim=args.lstm_hidden_dim, att_hidden_dim=args.att_hidden_dim, out_dim=1, mlp_dims=[1024, 512], embed_weights=embeds, finetune_embeds=args.finetune_embeds, n_layers=args.n_layers, bidirectional=args.bidir, img2seq=args.img2seq, dropout=args.dropout, n_levels=args.n_levels)
   if args.loss == 'BCE':
     loss_fn = torch.nn.BCEWithLogitsLoss()
   elif args.loss == 'rank':
@@ -451,7 +448,7 @@ if __name__ == '__main__':
       t_start_ep = time.time()
       print("\n\n==== Epoch {:d} ====".format(e+1))
       train(args, model, optim, train_loader)
-      val_acc = eval(args, model, val_loader, update_stats=True)
+      val_acc, _ = eval(args, model, val_loader, update_stats=True)
   
       with open(log_file, "w") as handle:
         json.dump(stats, handle)
@@ -464,6 +461,6 @@ if __name__ == '__main__':
 
   # Evaluate on test set
   print("\nEvaluating on test set...")
-  _, att = eval(args, model, test_loader, save='bow_test_top1.npy', save_att='att_49.npy')
+  _, att = eval(args, model, test_loader, save=args.result_fname, save_att=args.att_fname)
 
   print("\nTotal Time: {}h".format((time.time()-t_start_total)/60/60))

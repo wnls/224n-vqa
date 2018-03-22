@@ -1,3 +1,4 @@
+import os
 import json
 import numpy as np
 from glob import glob
@@ -6,7 +7,10 @@ import h5py
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--mode', default='best', type=str)
+parser.add_argument('--dir', default='checkpoints/', type=str)
+parser.add_argument('--format', default='*.json', type=str)
 parser.add_argument('--attribute', default='val_acc', type=str)
+parser.add_argument('--result_mtrx', default='results/result_att_nLv2.npy', type=str)
 
 def get_qtype_matrix(json_name, save=''):
   data = json.load(open(json_name, 'r'))
@@ -49,9 +53,9 @@ def eval_by_type(result_vec, type_mtrx):
   print('Overall: {:f}'.format(result_vec.sum() / result_vec.shape[0]))
 
 
-def check_best(attribute='val_acc'):
+def check_best(json_format,attribute='val_acc'):
   best_vals = []
-  for fname in glob('checkpoints/*.json'):
+  for fname in glob(json_format):
     data = json.load(open(fname, 'r'))
     if attribute in data:
       best_vals += (max(data[attribute]), fname),
@@ -82,10 +86,11 @@ def flat_spatial(fname_in='resnet101_layer4.h5'):
 
 if __name__ == '__main__':
   args = parser.parse_args()
-  # result_vec = np.load('bow_test_top1.npy')
-  # type_mtrx = get_qtype_matrix(json_name='data/visual7w-telling_test.json')
-  # eval_by_type(result_vec, type_mtrx)
-  if args.mode == 'best':
-    check_best(args.attribute)
+  if args.mode == 'qtype':
+    result_vec = np.load(args.result_mtrx)
+    type_mtrx = get_qtype_matrix(json_name='data/visual7w-telling_test.json')
+    eval_by_type(result_vec, type_mtrx)
+  elif args.mode == 'best':
+    check_best(os.path.join(args.dir, args.format), args.attribute)
   elif args.mode == 'flatten':
     flat_spatial('data/resnet101_layer4.h5')
